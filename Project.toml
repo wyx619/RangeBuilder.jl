@@ -1,0 +1,18 @@
+name = "AlphaHull"
+uuid = "6e0b2c5d-3b31-4fd4-8d33-0d1b6b7e2a31"
+version = "0.1.0"
+authors = ["AlphaHull contributors"]
+
+[deps]
+DelaunayTriangulation = "927a84f5-c5f4-47a5-9785-b46e178433df"
+Meshes = "eacbb407-ea5a-433e-ab97-5258b1ca43fa"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[compat]
+DelaunayTriangulation = "1.6.6"
+Meshes = "0.57.25"
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
