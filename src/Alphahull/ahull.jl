@@ -10,16 +10,47 @@ end
 _rotate(vx, vy, theta) = (cos(theta) * vx + sin(theta) * vy, -sin(theta) * vx + cos(theta) * vy)
 lengthahull(arcs::AbstractMatrix) = sum(2 .* arcs[:, 6] .* arcs[:, 3])
 
-function _angle_data(vx, vy, theta, ivx, ivy, itheta)
+const _ORDER_1324 = UInt16(1 | (3 << 3) | (4 << 6) | (2 << 9))
+const _ORDER_3412 = UInt16(3 | (4 << 3) | (1 << 6) | (2 << 9))
+const _ORDER_3142 = UInt16(3 | (1 << 3) | (4 << 6) | (2 << 9))
+const _ORDER_1234 = UInt16(1 | (2 << 3) | (3 << 6) | (4 << 9))
+const _ORDER_1324_ALT = UInt16(1 | (3 << 3) | (2 << 6) | (4 << 9))
+
+@inline function _angle_order(a1, a2, a3, a4)
+    v1, v2, v3, v4 = a1, a2, a3, a4
+    i1, i2, i3, i4 = 1, 2, 3, 4
+    if v2 < v1
+        v1, v2 = v2, v1
+        i1, i2 = i2, i1
+    end
+    if v4 < v3
+        v3, v4 = v4, v3
+        i3, i4 = i4, i3
+    end
+    if v3 < v1
+        v1, v3 = v3, v1
+        i1, i3 = i3, i1
+    end
+    if v4 < v2
+        v2, v4 = v4, v2
+        i2, i4 = i4, i2
+    end
+    if v3 < v2
+        i2, i3 = i3, i2
+    end
+    return UInt16(i1 | (i2 << 3) | (i3 << 6) | (i4 << 9))
+end
+
+@inline function _angle_data(vx, vy, theta, ivx, ivy, itheta)
     angox = vy >= 0 ? acos(clamp(vx, -1.0, 1.0)) : 2pi - acos(clamp(vx, -1.0, 1.0))
     _, iy = _rotate(ivx, ivy, angox)
     ix, _ = _rotate(ivx, ivy, angox)
     phi = acos(clamp(ix, -1.0, 1.0))
     signedphi = iy >= 0 ? phi : -phi
-    angles = [-theta, theta, signedphi - itheta, signedphi + itheta]
-    labels = (:theta1, :theta2, :beta1, :beta2)
-    order = Tuple(labels[sortperm(angles)])
-    return (angles=angles, order=order, angox=angox,
+    angle1, angle2 = -theta, theta
+    angle3, angle4 = signedphi - itheta, signedphi + itheta
+    return (angle1=angle1, angle2=angle2, angle3=angle3, angle4=angle4,
+            order=_angle_order(angle1, angle2, angle3, angle4), angox=angox,
             theta1=angox-theta, theta2=angox+theta,
             beta1=signedphi+angox-itheta, beta2=signedphi+angox+itheta)
 end
@@ -34,18 +65,36 @@ function _arc_from_endpoints!(arc, points, a, b)
     arc[6] = atan(hypot(mx - px, my - py) / d)
 end
 
+mutable struct _ComplementArcSummary
+    count::Int
+    first_side_count::Int
+    smallest_ball::Int
+end
+
 function _initial_arcs(sh, cp)
+    summaries = Dict{Tuple{Int,Int},_ComplementArcSummary}()
+    for k in axes(cp, 1)
+        key = (Int(cp[k, 4]), Int(cp[k, 5]))
+        summary = get!(summaries, key) do
+            _ComplementArcSummary(0, 0, 0)
+        end
+        summary.count += 1
+        summary.first_side_count += cp[k, 16] == 1
+        if cp[k, 3] > 0 &&
+           (summary.smallest_ball == 0 || cp[k, 3] < cp[summary.smallest_ball, 3])
+            summary.smallest_ball = k
+        end
+    end
+
     arcs = Vector{Vector{Float64}}()
     ends = NTuple{2,Int}[]
     for e in axes(sh.edges, 1)
         i, j = Int(sh.edges[e, 1]), Int(sh.edges[e, 2])
-        matches = findall(k -> Int(cp[k, 4]) == i && Int(cp[k, 5]) == j, axes(cp, 1))
-        isempty(matches) && continue
-        first_side = count(k -> cp[k, 16] == 1, matches)
-        0 < first_side < length(matches) && continue
-        balls = filter(k -> cp[k, 3] > 0, matches)
-        isempty(balls) && continue
-        k = balls[argmin(cp[balls, 3])]
+        summary = get(summaries, (i, j), nothing)
+        isnothing(summary) && continue
+        0 < summary.first_side_count < summary.count && continue
+        k = summary.smallest_ball
+        k == 0 && continue
         arc = [cp[k, 1], cp[k, 2], cp[k, 3], cp[k, 17], cp[k, 18], cp[k, 19]]
         pmx, pmy = (cp[k, 6] + cp[k, 8]) / 2, (cp[k, 7] + cp[k, 9]) / 2
         tx, ty = _rotate(arc[4], arc[5], arc[6])
@@ -62,25 +111,48 @@ The mutable `arcs`, `ends`, and `points` collections correspond respectively
 to the R variables `arcs`, `indp`, and `cutp`.
 """
 function _cut_and_order!(arcs, ends, points)
+    initial_count = length(arcs)
+    origins = collect(1:initial_count)
+    can_intersect = falses(initial_count, initial_count)
+    for i in 1:(initial_count - 1)
+        ai = arcs[i]
+        for j in (i + 1):initial_count
+            aj = arcs[j]
+            dx, dy = ai[1] - aj[1], ai[2] - aj[2]
+            distance2 = dx * dx + dy * dy
+            lower = abs(ai[3] - aj[3])
+            upper = ai[3] + aj[3]
+            if lower * lower < distance2 < upper * upper
+                can_intersect[i, j] = true
+                can_intersect[j, i] = true
+            end
+        end
+    end
     watch = 1
     while watch <= length(arcs)
-        j = 1
-        while j <= length(arcs)
-            if j != watch
-                aw, aj = arcs[watch], arcs[j]
-                ci = inter(aw[1], aw[2], aw[3], aj[1], aj[2], aj[3])
-                if ci.n_cut == 2
+        watch_origin = origins[watch]
+        candidates = Int[]
+        for candidate in eachindex(arcs)
+            can_intersect[watch_origin, origins[candidate]] && push!(candidates, candidate)
+        end
+        candidate_position = 1
+        while candidate_position <= length(candidates)
+            j = candidates[candidate_position]
+            aw, aj = arcs[watch], arcs[j]
+            if can_intersect[watch_origin, origins[j]]
+                    ci = inter(aw[1], aw[2], aw[3], aj[1], aj[2], aj[3])
+                    if ci.n_cut == 2
                     ad = _angle_data(aw[4], aw[5], aw[6], ci.v1[1], ci.v1[2], ci.theta1)
                     shared = ends[watch][1] == ends[j][1] || ends[watch][1] == ends[j][2] ||
                              ends[watch][2] == ends[j][1] || ends[watch][2] == ends[j][2]
                     if shared && ends[watch][1] == ends[j][2]
-                        case = ad.order == (:theta1, :beta1, :beta2, :theta2) ? 2 :
-                               ad.order == (:beta1, :beta2, :theta1, :theta2) ? 1 : 0
-                        if ad.order == (:beta1, :theta1, :beta2, :theta2)
-                            case = abs((ad.angles[1] - ad.angles[3]) / 2) < 1e-5 ? 2 : 1
+                        case = ad.order == _ORDER_1324 ? 2 :
+                               ad.order == _ORDER_3412 ? 1 : 0
+                        if ad.order == _ORDER_3142
+                            case = abs((ad.angle1 - ad.angle3) / 2) < 1e-5 ? 2 : 1
                         end
                         if case == 2
-                            middle = (ad.angles[2] - ad.angles[4]) / 2
+                            middle = (ad.angle2 - ad.angle4) / 2
                             nvx, nvy = _rotate(1.0, 0.0, -aw[6] + middle - ad.angox)
                             qx, qy = _rotate(nvx, nvy, middle)
                             push!(points, (aw[1] + aw[3] * qx, aw[2] + aw[3] * qy))
@@ -91,13 +163,13 @@ function _cut_and_order!(arcs, ends, points)
                             ends[j] = (ends[j][1], inn)
                         end
                     elseif shared && ends[watch][2] == ends[j][1]
-                        case = ad.order == (:theta1, :beta1, :beta2, :theta2) ? 2 :
-                               ad.order == (:theta1, :theta2, :beta1, :beta2) ? 1 : 0
-                        if ad.order == (:theta1, :beta1, :theta2, :beta2)
-                            case = abs((ad.angles[2] - ad.angles[4]) / 2) < 1e-5 ? 2 : 1
+                        case = ad.order == _ORDER_1324 ? 2 :
+                               ad.order == _ORDER_1234 ? 1 : 0
+                        if ad.order == _ORDER_1324_ALT
+                            case = abs((ad.angle2 - ad.angle4) / 2) < 1e-5 ? 2 : 1
                         end
                         if case == 2
-                            middle = (ad.angles[3] - ad.angles[1]) / 2
+                            middle = (ad.angle3 - ad.angle1) / 2
                             nvx, nvy = _rotate(1.0, 0.0, aw[6] - middle - ad.angox)
                             qx, qy = _rotate(nvx, nvy, -middle)
                             push!(points, (aw[1] + aw[3] * qx, aw[2] + aw[3] * qy))
@@ -107,14 +179,15 @@ function _cut_and_order!(arcs, ends, points)
                             _arc_from_endpoints!(aj, points, inn, ends[j][2])
                             ends[j] = (inn, ends[j][2])
                         end
-                    elseif !shared && ad.order == (:theta1, :beta1, :beta2, :theta2)
+                    elseif !shared && ad.order == _ORDER_1324
                         bd = _angle_data(aj[4], aj[5], aj[6], ci.v2[1], ci.v2[2], ci.theta2)
-                        if bd.order == (:theta1, :beta1, :beta2, :theta2)
-                            middle1 = (ad.angles[3] - ad.angles[1]) / 2
+                        if bd.order == _ORDER_1324
+                            middle1 = (ad.angle3 - ad.angle1) / 2
                             nvx1, nvy1 = _rotate(1.0, 0.0, aw[6] - middle1 - ad.angox)
-                            middle2 = (ad.angles[2] - ad.angles[4]) / 2
+                            middle2 = (ad.angle2 - ad.angle4) / 2
                             nvx2, nvy2 = _rotate(1.0, 0.0, -aw[6] + middle2 - ad.angox)
                             push!(arcs, [aw[1], aw[2], aw[3], nvx2, nvy2, middle2])
+                            push!(origins, origins[watch])
                             aw[4], aw[5], aw[6] = nvx1, nvy1, middle1
                             q1x, q1y = _rotate(nvx1, nvy1, -middle1)
                             q2x, q2y = _rotate(nvx2, nvy2, middle2)
@@ -132,24 +205,47 @@ function _cut_and_order!(arcs, ends, points)
                             newarc = [aj[1], aj[2], aj[3], aj[4], aj[5], aj[6]]
                             _arc_from_endpoints!(newarc, points, inn2, old_j_start)
                             push!(arcs, newarc)
+                            push!(origins, origins[j])
+                            can_intersect[watch_origin, origins[j]] && push!(candidates, length(arcs))
                         end
                     end
-                end
+                    end
             end
-            j += 1
+            candidate_position += 1
         end
         watch += 1
     end
     order = Int[]
-    remaining = collect(1:length(ends))
-    while !isempty(remaining)
-        current = popfirst!(remaining)
+    sizehint!(order, length(ends))
+    by_start = [Int[] for _ in 1:length(points)]
+    for i in eachindex(ends)
+        push!(by_start[ends[i][1]], i)
+    end
+    next_position = ones(Int, length(points))
+    used = falses(length(ends))
+    first_remaining = 1
+    remaining_count = length(ends)
+    while remaining_count > 0
+        while used[first_remaining]
+            first_remaining += 1
+        end
+        current = first_remaining
+        used[current] = true
+        remaining_count -= 1
         push!(order, current)
         while true
-            nextpos = findfirst(k -> ends[k][1] == ends[current][2], remaining)
-            isnothing(nextpos) && break
-            current = remaining[nextpos]
-            deleteat!(remaining, nextpos)
+            endpoint = ends[current][2]
+            candidates = by_start[endpoint]
+            position = next_position[endpoint]
+            while position <= length(candidates) && used[candidates[position]]
+                position += 1
+            end
+            next_position[endpoint] = position
+            position > length(candidates) && break
+            current = candidates[position]
+            next_position[endpoint] = position + 1
+            used[current] = true
+            remaining_count -= 1
             push!(order, current)
         end
     end

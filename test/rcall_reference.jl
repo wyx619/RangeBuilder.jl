@@ -1,7 +1,6 @@
 using Test
 using RangeBuilder
 using RCall
-using DelimitedFiles
 using Random
 
 function r_delvor(points)
@@ -162,8 +161,10 @@ canonical_arcs(arcs) = arcs[sortperm(1:size(arcs, 1); by=i -> (arcs[i, 7], arcs[
 @test canonical_arcs(j_ahull.arcs) ≈ canonical_arcs(r_arcs) atol=1e-9 rtol=1e-9
 @test j_ahull.xahull ≈ r_points atol=1e-9 rtol=1e-9
 
-ring_path = joinpath(@__DIR__, "fixtures", "generated", "ring_alpha_0.35_points.csv")
-ring = Float64.(readdlm(ring_path, ',', skipstart=1))
+rng = MersenneTwister(20260808)
+ring_angles = 2pi .* rand(rng, 24)
+ring_radii = sqrt.(0.35^2 .+ (1.0 - 0.35^2) .* rand(rng, 24))
+ring = hcat(ring_radii .* cos.(ring_angles), ring_radii .* sin.(ring_angles))
 r_arcs, r_points = r_ahull(ring, 0.35)
 j_ahull = ahull(ring; alpha=0.35)
 println("R ring: arcs=$(size(r_arcs)), points=$(size(r_points)); Julia ring: arcs=$(size(j_ahull.arcs)), points=$(size(j_ahull.xahull))")

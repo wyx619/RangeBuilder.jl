@@ -21,7 +21,7 @@ median_time <- function(f, repeats=7) {
 }
 
 library(alphahull)
-for (n in c(500, 2000)) {
+for (n in c(500, 2000, 10000, 100000)) {
   points <- benchmark_points(n)
   alpha <- 0.07
   elapsed <- median_time(function() {

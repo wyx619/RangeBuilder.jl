@@ -1,4 +1,4 @@
-"""Serialize a GeoInterface polygon or multipolygon as WKT.
+"""Serialize a GeoInterface range geometry as WKT.
 
 This small text-only adapter is intended for foreign-language callers.  It
 keeps GeoInterface wrapper objects inside Julia, where the geometry kernel
@@ -15,8 +15,11 @@ function _geometry_wkt(geometry)
         return string("POLYGON ", polygon_wkt(coordinates))
     elseif trait isa GeoInterface.MultiPolygonTrait
         return string("MULTIPOLYGON (", join(polygon_wkt.(coordinates), ", "), ")")
+    elseif trait isa GeoInterface.GeometryCollectionTrait
+        geometries = [GeoInterface.getgeom(trait, geometry, i) for i in 1:GeoInterface.ngeom(trait, geometry)]
+        return string("GEOMETRYCOLLECTION (", join(_geometry_wkt.(geometries), ", "), ")")
     end
-    throw(ArgumentError("expected a polygon or multipolygon, got $(typeof(geometry))"))
+    throw(ArgumentError("expected a polygonal range geometry, got $(typeof(geometry))"))
 end
 
 """

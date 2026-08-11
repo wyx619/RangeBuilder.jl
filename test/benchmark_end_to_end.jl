@@ -27,7 +27,7 @@ function median_time(f; repeats=7)
     return times[cld(length(times), 2)]
 end
 
-for n in (500, 2000)
+for n in (500, 2000, 10_000, 100_000)
     points = benchmark_points(n)
     alpha = 0.07
     elapsed = median_time(() -> begin

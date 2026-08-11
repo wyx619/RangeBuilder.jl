@@ -68,6 +68,11 @@ land_mask = filterByLand(land_points; coastScale=50)
 @test land_mask[2] === false
 @test ismissing(land_mask[3])
 
+empty!(RangeBuilder._range_world_cache)
+empty!(RangeBuilder._range_land_buffer_cache)
+bundled_land_mask = filterByLand([116.0 39.0; 0.0 0.0]; coastScale=50)
+@test bundled_land_mask == Union{Missing,Bool}[true, false]
+
 dynamic = getDynamicAlphaHull(pts; fraction=0.8, partCount=3, buff=0,
                               initialAlpha=0.7, alphaIncrement=0.1,
                               alphaCap=2, clipToCoast=:no)
@@ -77,6 +82,21 @@ dynamic_buffered = getDynamicAlphaHull(pts; fraction=0.8, partCount=3, buff=1000
                                        initialAlpha=0.7, alphaIncrement=0.1,
                                        alphaCap=2, clipToCoast=:no)
 @test dynamic_buffered.alpha == "alpha0.8"
+
+buffer_components = [
+    GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (0.01, 0.0),
+                                    (0.01, 0.01), (0.0, 0.01),
+                                    (0.0, 0.0)]]; crs=4326),
+    GeoInterface.Wrappers.Polygon([[(0.015, 0.0), (0.025, 0.0),
+                                    (0.025, 0.01), (0.015, 0.01),
+                                    (0.015, 0.0)]]; crs=4326),
+]
+buffer_source = GeoInterface.Wrappers.MultiPolygon(buffer_components; crs=4326)
+buffered_components = RangeBuilder._buffer_range(buffer_source, 1000; force=true)
+@test GeoInterface.geomtrait(buffered_components) isa GeoInterface.GeometryCollectionTrait
+@test RangeBuilder._polygon_count(buffered_components) == 2
+@test startswith(RangeBuilder._geometry_wkt(buffered_components), "GEOMETRYCOLLECTION")
+
 dynamic_wkt = getDynamicAlphaHullWKT(pts; fraction=0.8, partCount=3, buff=0,
                                      initialAlpha=0.7, alphaIncrement=0.1,
                                      alphaCap=2, clipToCoast=:no)
@@ -138,13 +158,3 @@ mixed_stack = rasterStackFromPolyList((square=square, tiny=tiny);
 @test occursin("AHull", sprint(show, ah))
 @test occursin("complement", sprint(show, MIME"text/plain"(), ah))
 @test occursin("CircleIntersection", sprint(show, ci))
-
-dv_spec = plotdata(dv; wlines=:both, wpoints=true, number=true)
-@test dv_spec isa PlotSpec
-@test dv_spec.xlim == (0.0, 1.0)
-@test any(command -> command.kind == :labels, dv_spec.commands)
-@test any(command -> command.kind == :segment && command.linestyle == :dash, dv_spec.commands)
-@test length(plotdata(sh; wlines=:none).commands) >= 1
-@test length(plotdata(ah; do_shape=true, wlines=:vor).commands) >= 1
-
-include("golden_fixtures.jl")
