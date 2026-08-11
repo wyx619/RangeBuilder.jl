@@ -1,12 +1,12 @@
 [deps]
-AlphaHull = "6e0b2c5d-3b31-4fd4-8d33-0d1b6b7e2a31"
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 RCall = "6f49c342-dc21-5d91-9882-a32aef131414"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
+RangeBuilder = "6f1f03ec-aa9c-4bed-a5d6-4426c7e0f3ce"
+Rasters = "a3a2b9e3-a471-40c9-b274-f788e487c689"
+GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 RCall = "0.14.13"
-
-[sources]
-AlphaHull = {path = ".."}
+Rasters = "0.15"

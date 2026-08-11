@@ -1,5 +1,5 @@
 using Test
-using AlphaHull
+using RangeBuilder
 using RCall
 using DelimitedFiles
 using Random
@@ -56,6 +56,21 @@ function r_complement(points, alpha)
     return RCall.rcopy(RCall.reval("complement(points, alpha=alpha)"))
 end
 
+function r_dynamic_alpha(points; fraction, partCount, buff, initialAlpha,
+                         alphaIncrement, alphaCap)
+    @rput points fraction partCount buff initialAlpha alphaIncrement alphaCap
+    RCall.reval("library(rangeBuilder)")
+    return RCall.rcopy(RCall.reval(
+        "getDynamicAlphaHull(points, fraction=fraction, partCount=partCount, buff=buff, coordHeaders=c(1, 2), clipToCoast='no', initialAlpha=initialAlpha, alphaIncrement=alphaIncrement, alphaCap=alphaCap)[[2]]"
+    ))
+end
+
+function r_filter_by_land(points)
+    @rput points
+    RCall.reval("library(rangeBuilder)")
+    return RCall.rcopy(RCall.reval("filterByLand(points)"))
+end
+
 function align_point_ids(jpoints, rpoints)
     length(jpoints) == length(rpoints) || error("different point counts")
     mapping = zeros(Int, size(jpoints, 1))
@@ -107,6 +122,34 @@ end
 canonical_complement(rows) = canonical_rows(rows[:, 1:3])
 
 points = [0.0 0.0; 2.0 0.0; 2.0 1.0; 0.0 2.0; 0.6 0.7]
+
+dynamic_points = [0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.5 0.5]
+for buff in (0.0, 1000.0)
+    julia_dynamic = getDynamicAlphaHull(
+        dynamic_points;
+        fraction=0.8,
+        partCount=3,
+        buff=buff,
+        initialAlpha=0.7,
+        alphaIncrement=0.1,
+        alphaCap=2,
+        clipToCoast=:no,
+    )
+    r_dynamic = r_dynamic_alpha(
+        dynamic_points;
+        fraction=0.8,
+        partCount=3,
+        buff=buff,
+        initialAlpha=0.7,
+        alphaIncrement=0.1,
+        alphaCap=2,
+    )
+    @test julia_dynamic.alpha == r_dynamic
+end
+
+land_reference_points = [116.4074 39.9042; -140.0 0.0]
+@test filterByLand(land_reference_points; coastScale=50) == r_filter_by_land(land_reference_points)
+
 rmesh = canonical(r_delvor(points))
 jmesh = canonical(delvor(points).mesh)
 @test size(jmesh) == size(rmesh)

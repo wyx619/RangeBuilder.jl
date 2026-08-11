@@ -1,4 +1,4 @@
-using AlphaHull
+using RangeBuilder
 using Random
 
 function measure(label, f; repeats=7)
