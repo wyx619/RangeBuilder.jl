@@ -46,8 +46,10 @@ reimplementation. They are deliberately small enough to be rerun locally.
 | `ahull` + `areaahull`, 500 points | 0.0071 s | `alphahull`: 0.0600 s | 8.5× faster |
 | `ahull` + `areaahull`, 2,000 points | 0.0318 s | `alphahull`: 0.2200 s | 6.9× faster |
 | `ahull` + `areaahull`, 10,000 points | 0.2225 s | `alphahull`: 1.1300 s | 5.1× faster |
+| `ahull` + `areaahull`, 100,000 points | 4.9479 s | `alphahull`: 39.0300 s | 7.9× faster |
 | Dynamic search, 500 points, four alpha candidates | 0.0453 s | `rangeBuilder`: 4.17 s | 92× faster |
 | Dynamic search, 1,000 points, ten alpha candidates | 0.4474 s | `rangeBuilder`: 30.75 s | 68.7× faster |
+| Dynamic search, 10,000 points, ten available alpha candidates | 1.5555 s | `rangeBuilder`: 1102.1 s | 708× faster* |
 
 The dynamic benchmarks use `fraction=0.95`, `partCount=3`, `buff=0`, and
 disabled coast clipping so they isolate range construction. The 500-point row
@@ -57,6 +59,14 @@ searches `0.005:0.005:0.020`; the 1,000-point row searches
 expected: the original R workflow repeatedly invokes `alphahull::ahull()` as
 alpha changes, whereas RangeBuilder.jl reuses its single Delaunay/Voronoi
 construction.
+
+At the larger dynamic-search target (10,000 points and ten available alpha
+candidates), RangeBuilder.jl selected `alpha0.02` and had a warmed median of
+**1.5555 s**. A single original R `rangeBuilder` run took **1102.1 s**
+(about 18.4 minutes) and selected the same `alpha0.02`. The 708× figure is
+therefore an indicative single-run comparison (*), not an R median; a full
+seven-repeat R median is intentionally omitted because it is prohibitively
+long. This target is intentionally opt-in in the benchmark script.
 
 The benchmark scripts under `test/` measure both cached alpha-hull components
 and end-to-end construction at fixed random seeds. They are designed for
@@ -167,7 +177,13 @@ julia --project=test test/rcall_reference.jl
 julia --project=. test/benchmark_core.jl
 julia --project=. test/benchmark_end_to_end.jl
 Rscript test/benchmark_end_to_end.R
-julia --project=test test/benchmark_dynamic_reference.jl
+julia --project=test test/benchmark_dynamic_reference.jl 500 1000
+
+# Long-running large dynamic comparison
+julia --project=test test/benchmark_dynamic_reference.jl 10000
+
+# One original-R run for the 10,000-point large comparison
+julia --project=test test/benchmark_dynamic_r_once.jl
 ```
 
 The RCall reference script compares against the installed `alphahull` R
@@ -186,4 +202,5 @@ area evaluation.
 `benchmark_dynamic_reference.jl` compares `getDynamicAlphaHull` with the
 installed original R `rangeBuilder` package through RCall. RCall is confined
 to the test environment and remains outside the package's runtime
-dependencies.
+dependencies. With no arguments it runs the 500- and 1,000-point reference
+cases; pass `10000` explicitly for the long-running large comparison.

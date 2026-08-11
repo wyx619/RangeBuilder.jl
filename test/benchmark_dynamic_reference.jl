@@ -45,11 +45,15 @@ function r_dynamic_time(points; initialAlpha, alphaIncrement, alphaCap)
     )
 end
 
-for (n, initialAlpha, alphaIncrement, alphaCap) in (
+benchmarks = (
     (500, 0.005, 0.005, 0.020),
     (1_000, 0.005, 0.005, 0.050),
     (10_000, 0.005, 0.005, 0.050),
 )
+selected = isempty(ARGS) ? benchmarks[1:2] : filter(spec -> string(spec[1]) in ARGS, benchmarks)
+isempty(selected) && error("pass one or more supported point counts: 500, 1000, 10000")
+
+for (n, initialAlpha, alphaIncrement, alphaCap) in selected
     points = benchmark_points(n)
     julia_result = getDynamicAlphaHull(
         points;
