@@ -47,10 +47,14 @@ function _dummycoor(x, i, j, m, away, interior)
 end
 
 """Construct the Delaunay/Voronoi edge table used by `ashape`."""
-function delvor(x, y=nothing)
+function delvor(x, y=nothing; rng::Random.AbstractRNG=Random.MersenneTwister(0))
     xy = _points(x, y)
     pts = [(xy[i, 1], xy[i, 2]) for i in axes(xy, 1)]
-    tri = triangulate(pts)
+    # Use a call-local deterministic stream. The upstream default RNG is
+    # process-global, so serial and threaded batches otherwise consume it in
+    # different orders and can select different valid Delaunay insertion
+    # orders for the same species.
+    tri = triangulate(pts; rng)
     span = max(maximum(xy[:, 1]) - minimum(xy[:, 1]), maximum(xy[:, 2]) - minimum(xy[:, 2]))
     span = span > 0 ? span : 1.0
     edges = sort!(collect(DelaunayTriangulation.each_solid_edge(tri)))

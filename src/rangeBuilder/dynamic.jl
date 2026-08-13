@@ -1,6 +1,36 @@
 const _range_world_cache = Dict{Int,Any}()
 const _range_land_path = normpath(joinpath(@__DIR__, "..", "geodata", "ne_50m_land.jld2"))
 
+mutable struct _RangeProjTransforms
+    context::Ptr{Proj.PJ_CONTEXT}
+    forward::Proj.Transformation
+    inverse::Proj.Transformation
+    geos::LibGEOS.GEOSContext
+end
+
+function _range_native_context()
+    context = Proj.proj_context_create()
+    forward = Proj.Transformation(
+        "EPSG:4326", "+proj=eqearth";
+        always_xy=true,
+        ctx=context,
+    )
+    inverse = Proj.Transformation(
+        "+proj=eqearth", "EPSG:4326";
+        always_xy=true,
+        ctx=context,
+    )
+    holder = _RangeProjTransforms(context, forward, inverse, LibGEOS.GEOSContext())
+    finalizer(holder) do value
+        finalize(value.forward)
+        finalize(value.inverse)
+        finalize(value.geos)
+        value.context != C_NULL && Proj.proj_context_destroy(value.context)
+        value.context = C_NULL
+    end
+    return holder
+end
+
 function _unique_finite_coordinates(points::AbstractMatrix)
     rows = Tuple{Float64,Float64}[]
     seen = Set{Tuple{Float64,Float64}}()
@@ -23,36 +53,50 @@ function _polygon_count(poly)
     return 0
 end
 
-function _points_in_polygon(points::AbstractMatrix, poly)
-    isnothing(poly) && return falses(size(points, 1))
-    inside = falses(size(points, 1))
-    prepared = try
-        LibGEOS.prepareGeom(GeoInterface.convert(LibGEOS, poly))
-    catch
-        nothing
-    end
-    if isnothing(prepared)
-        wrappers = GeoInterface.Wrappers
-        for i in axes(points, 1)
-            point = wrappers.Point(points[i, 1], points[i, 2]; crs=4326)
-            inside[i] = try
-                GeometryOps.intersects(point, poly)
-            catch
-                false
-            end
+@inline function _point_on_segment(px, py, ax, ay, bx, by)
+    cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+    abs(cross) <= 16eps(Float64) * max(1.0, abs(px), abs(py), abs(ax), abs(ay), abs(bx), abs(by)) || return false
+    return min(ax, bx) <= px <= max(ax, bx) && min(ay, by) <= py <= max(ay, by)
+end
+
+function _ring_contains(px, py, ring)
+    inside = false
+    previous = last(ring)
+    for current in ring
+        ax, ay = Float64(previous[1]), Float64(previous[2])
+        bx, by = Float64(current[1]), Float64(current[2])
+        _point_on_segment(px, py, ax, ay, bx, by) && return true
+        if (ay > py) != (by > py)
+            x_intersection = ax + (py - ay) * (bx - ax) / (by - ay)
+            x_intersection > px && (inside = !inside)
         end
-        return inside
-    end
-    context = LibGEOS.get_context(prepared)
-    for i in axes(points, 1)
-        inside[i] = LibGEOS.GEOSPreparedIntersectsXY_r(
-            context,
-            prepared.ptr,
-            points[i, 1],
-            points[i, 2]
-        ) == 1
+        previous = current
     end
     return inside
+end
+
+function _polygon_contains(px, py, poly)
+    exterior = GeoInterface.getexterior(poly)
+    _ring_contains(px, py, GeoInterface.getpoint(exterior)) || return false
+    for hole in GeoInterface.gethole(poly)
+        _ring_contains(px, py, GeoInterface.getpoint(hole)) && return false
+    end
+    return true
+end
+
+function _geometry_contains(px, py, poly)
+    trait = GeoInterface.geomtrait(poly)
+    if trait isa GeoInterface.PolygonTrait
+        return _polygon_contains(px, py, poly)
+    elseif trait isa GeoInterface.MultiPolygonTrait || trait isa GeoInterface.GeometryCollectionTrait
+        return any(_geometry_contains(px, py, GeoInterface.getgeom(trait, poly, i)) for i in 1:GeoInterface.ngeom(trait, poly))
+    end
+    return false
+end
+
+function _points_in_polygon(points::AbstractMatrix, poly, native=nothing)
+    isnothing(poly) && return falses(size(points, 1))
+    return [_geometry_contains(points[i, 1], points[i, 2], poly) for i in axes(points, 1)]
 end
 
 function _convex_hull_polygon(points::AbstractMatrix; crs=4326)
@@ -78,17 +122,28 @@ function _polygon_components(poly)
     return Any[]
 end
 
-function _buffer_range(poly, distance::Real; force::Bool=false)
-    distance <= 0 && !force && return poly
+function _buffer_range(poly, distance::Real; force::Bool=false, native=nothing)
+    # A zero-width buffer is the identity operation. In particular, do not
+    # project it: R's `buff=0` path does not change candidate geometry.
+    distance == 0 && return poly
+    distance < 0 && throw(ArgumentError("buffer distance must be nonnegative"))
     components = _polygon_components(poly)
     isempty(components) && return poly
-    forward = Proj.Transformation("EPSG:4326", "+proj=eqearth"; always_xy=true)
-    inverse = Proj.Transformation("+proj=eqearth", "EPSG:4326"; always_xy=true)
-    geos = GeometryOps.GEOS()
+    # Each Julia task owns a PROJ context and reuses its transformations.
+    # This avoids the Windows libproj global-context crash without serializing
+    # candidate buffers.
+    transforms = isnothing(native) ? _range_native_context() : native
+    forward, inverse = transforms.forward, transforms.inverse
+    geos = transforms.geos
     buffered = map(components) do component
         projected = GeometryOps.reproject(component, forward; target_crs="+proj=eqearth")
+        trait = GeoInterface.geomtrait(projected)
+        projected_geos = GeoInterface.convert(
+            LibGEOS.geointerface_geomtype(trait), trait, projected;
+            context=geos,
+        )
         GeometryOps.reproject(
-            GeometryOps.buffer(geos, projected, Float64(distance)), inverse;
+            LibGEOS.bufferWithStyle(projected_geos, Float64(distance); context=geos), inverse;
             target_crs="EPSG:4326"
         )
     end
@@ -117,8 +172,8 @@ function _clip_range(poly, clipToCoast, scale::Integer)
                                   GeometryOps.difference(GeometryOps.GEOS(), poly, world)
 end
 
-function _range_constraints(points::AbstractMatrix, poly, fraction::Real, partCount::Integer)
-    coverage = count(_points_in_polygon(points, poly)) / size(points, 1)
+function _range_constraints(points::AbstractMatrix, poly, fraction::Real, partCount::Integer, native)
+    coverage = count(_points_in_polygon(points, poly, native)) / size(points, 1)
     return _polygon_count(poly) <= partCount && coverage >= fraction
 end
 
@@ -150,6 +205,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     accepted_alpha = nothing
     buffered = false
     cap = Float64(alphaCap) + eps(Float64(alphaCap))
+    native = _range_native_context()
     delaunay = try
         delvor(points)
     catch
@@ -172,7 +228,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
         candidate === nothing && (alpha += alphaIncrement)
     end
 
-    if candidate !== nothing && _range_constraints(points, candidate, fraction, partCount)
+    if candidate !== nothing && _range_constraints(points, candidate, fraction, partCount, native)
         hull = candidate
         accepted_alpha = alpha
     end
@@ -183,8 +239,8 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
         verbose && println("\talpha: ", alpha)
         candidate = alpha_polygon(alpha)
         candidate === nothing && continue
-        candidate = _buffer_range(candidate, buff; force=true)
-        if _range_constraints(points, candidate, fraction, partCount)
+        candidate = _buffer_range(candidate, buff; force=true, native)
+        if _range_constraints(points, candidate, fraction, partCount, native)
             hull = candidate
             accepted_alpha = alpha
             buffered = true
@@ -197,7 +253,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
         buffered = false
     end
     hull === nothing && throw(ArgumentError("could not construct a polygon from the coordinates"))
-    buffered || (hull = _buffer_range(hull, buff; force=true))
+    buffered || (hull = _buffer_range(hull, buff; force=true, native))
     hull = _clip_range(hull, clipToCoast, coastScale)
     alpha_label = accepted_alpha isa String ? accepted_alpha :
                   (isinteger(accepted_alpha) ? string(Int(round(accepted_alpha))) :

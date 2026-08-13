@@ -76,7 +76,7 @@ bundled_land_mask = filterByLand([116.0 39.0; 0.0 0.0]; coastScale=50)
 dynamic = getDynamicAlphaHull(pts; fraction=0.8, partCount=3, buff=0,
                               initialAlpha=0.7, alphaIncrement=0.1,
                               alphaCap=2, clipToCoast=:no)
-@test dynamic.alpha == "alphaMCH"
+@test dynamic.alpha == "alpha0.8"
 @test occursin("Polygon", string(typeof(dynamic.hull)))
 dynamic_buffered = getDynamicAlphaHull(pts; fraction=0.8, partCount=3, buff=1000,
                                        initialAlpha=0.7, alphaIncrement=0.1,
