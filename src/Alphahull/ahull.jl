@@ -113,33 +113,50 @@ to the R variables `arcs`, `indp`, and `cutp`.
 function _cut_and_order!(arcs, ends, points)
     initial_count = length(arcs)
     origins = collect(1:initial_count)
-    can_intersect = falses(initial_count, initial_count)
-    for i in 1:(initial_count - 1)
+    # Keep only geometrically possible circle pairs. The previous dense
+    # `a × a` matrix was both allocation-heavy and needlessly scanned for
+    # every arc. A sweep on circle bounding boxes preserves the original
+    # origin order while constructing a sparse adjacency list.
+    can_intersect = [Int[] for _ in 1:initial_count]
+    order_x = sortperm(1:initial_count; by=i -> arcs[i][1] - arcs[i][3])
+    for oi in eachindex(order_x)
+        i = order_x[oi]
         ai = arcs[i]
-        for j in (i + 1):initial_count
+        axmax = ai[1] + ai[3]
+        for oj in (oi + 1):length(order_x)
+            j = order_x[oj]
             aj = arcs[j]
+            aj[1] - aj[3] > axmax && break
+            abs(ai[2] - aj[2]) > ai[3] + aj[3] && continue
             dx, dy = ai[1] - aj[1], ai[2] - aj[2]
             distance2 = dx * dx + dy * dy
             lower = abs(ai[3] - aj[3])
             upper = ai[3] + aj[3]
             if lower * lower < distance2 < upper * upper
-                can_intersect[i, j] = true
-                can_intersect[j, i] = true
+                push!(can_intersect[i], j)
+                push!(can_intersect[j], i)
             end
         end
     end
+    for candidates in can_intersect
+        sort!(candidates)
+    end
+    origin_arcs = [[i] for i in 1:initial_count]
     watch = 1
     while watch <= length(arcs)
         watch_origin = origins[watch]
         candidates = Int[]
-        for candidate in eachindex(arcs)
-            can_intersect[watch_origin, origins[candidate]] && push!(candidates, candidate)
+        for candidate_origin in can_intersect[watch_origin]
+            append!(candidates, origin_arcs[candidate_origin])
         end
+        sort!(candidates)
         candidate_position = 1
         while candidate_position <= length(candidates)
             j = candidates[candidate_position]
             aw, aj = arcs[watch], arcs[j]
-            if can_intersect[watch_origin, origins[j]]
+            adjacent = can_intersect[watch_origin]
+            position = searchsortedfirst(adjacent, origins[j])
+            if position <= length(adjacent) && adjacent[position] == origins[j]
                     ci = inter(aw[1], aw[2], aw[3], aj[1], aj[2], aj[3])
                     if ci.n_cut == 2
                     ad = _angle_data(aw[4], aw[5], aw[6], ci.v1[1], ci.v1[2], ci.theta1)
@@ -188,6 +205,7 @@ function _cut_and_order!(arcs, ends, points)
                             nvx2, nvy2 = _rotate(1.0, 0.0, -aw[6] + middle2 - ad.angox)
                             push!(arcs, [aw[1], aw[2], aw[3], nvx2, nvy2, middle2])
                             push!(origins, origins[watch])
+                            push!(origin_arcs[origins[watch]], length(arcs))
                             aw[4], aw[5], aw[6] = nvx1, nvy1, middle1
                             q1x, q1y = _rotate(nvx1, nvy1, -middle1)
                             q2x, q2y = _rotate(nvx2, nvy2, middle2)
@@ -206,7 +224,11 @@ function _cut_and_order!(arcs, ends, points)
                             _arc_from_endpoints!(newarc, points, inn2, old_j_start)
                             push!(arcs, newarc)
                             push!(origins, origins[j])
-                            can_intersect[watch_origin, origins[j]] && push!(candidates, length(arcs))
+                            push!(origin_arcs[origins[j]], length(arcs))
+                            adjacent = can_intersect[watch_origin]
+                            position = searchsortedfirst(adjacent, origins[j])
+                            position <= length(adjacent) && adjacent[position] == origins[j] &&
+                                push!(candidates, length(arcs))
                         end
                     end
                     end
