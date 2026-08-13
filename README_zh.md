@@ -20,6 +20,10 @@ Delaunay/Voronoi 构建，以及动态 alpha 搜索中对候选值的反复评�
   重复的全图 ghost-vertex 扫描替换为 O(1) 哨兵查询，避免大点集出现严重的尺度退化。
 - **alpha-hull 装配优化。** 圆弧与圆的预筛、补集索引缓存、基于端点索引的圆弧排序，
   消除了大量无效工作；点覆盖判断采用 prepared GEOS 几何，范围缓冲复用坐标转换。
+- **稀疏圆弧候选。** 使用圆包围盒 sweep 构建稀疏邻接表，替代 `a × a` 的密集布尔矩阵；
+  原有圆弧裁剪状态机和候选顺序保持不变。
+- **严格等价的网格后处理短路。** 对大范围使用 prepared GEOS 的 `covers` 判断直接接受
+  完全被范围覆盖的网格；边界网格仍使用原始 GEOS `intersects`，因此网格结果不变。
 
 在开发机上，10,000 点、4 个 alpha 候选的热态动态搜索优化后约为 **1.5–1.6 秒**，
 此前实现约为 **46.7 秒**。具体时间会随数据和硬件变化，但结构性改进是确定的：
@@ -54,6 +58,34 @@ Delaunay/Voronoi 构建，以及动态 alpha 搜索中对候选值的反复评�
 
 `test/` 中的基准脚本覆盖缓存后的 alpha-hull 组件与端到端构建，并使用固定随机种子，
 适合比较同一台机器上的不同修订版本。
+
+### Rosales 全量工作流
+
+Julia GBIF 工作流使用 8 个 Julia 线程处理 1,063,070 条清洗记录和 9,263 个物种，
+成功生成 9,263 个物种范围（7,519 个 alpha-hull 任务、1,744 个稀疏物种直接任务），
+并输出 763,715 行物种-网格记录。端到端耗时为 **211.46 秒**，其中范围构建耗时
+**191.54 秒**。这是 Julia 工作流的实测，不是与 R 的同条件对照。
+
+工作流脚本有意被 Git 忽略。根据本机数据路径调整后，可在 Julia 交互环境中运行：
+
+```powershell
+@'
+include(raw"C:\path\to\alphahull\R\build_species_alpha_hull_1deg_ranges_gbif.jl")
+using .RangeBuilderWorkflow
+run_family_ranges(
+    grid_path=raw"C:\path\to\alphahull\R\1d\1.shp",
+    occurrence_file=raw"E:\Rosales\native_records.csv.gz",
+    output_directory=raw"C:\path\to\alphahull\R\output\1deg_ranges",
+    family="Rosales", workers=8, overwrite=true,
+    buffer_m=10_000, fraction=0.95, part_count=3,
+    initial_alpha=2, alpha_increment=1, alpha_cap=400,
+    clip_to_coast=:terrestrial,
+)
+'@ | julia -t 8 --project=R/julia -
+```
+
+运行会在指定目录写出 `all_species_range_summary.csv`、物种网格分布文件和
+`workflow_timings.csv`。
 
 ## 使用
 

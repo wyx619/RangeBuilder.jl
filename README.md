@@ -27,6 +27,13 @@ construction and repeated candidate evaluation during dynamic alpha search.
   complement indices, and endpoint-indexed arc ordering remove avoidable work
   from the alpha-hull construction path. Coverage checks use prepared GEOS
   geometries; range buffering reuses coordinate transformations.
+- **Sparse arc candidates.** Arc intersection candidates are generated with a
+  bounding-box sweep and stored as a sparse adjacency list instead of a dense
+  `a × a` Boolean matrix. The original arc-cutting state machine and candidate
+  order are unchanged.
+- **Exact grid post-processing shortcuts.** Wide hulls use a prepared GEOS
+  `covers` check for cells fully contained by the hull; boundary cells retain
+  the original GEOS `intersects` predicate, so grid membership is unchanged.
 
 On the development machine, a warmed dynamic search over 10,000 points and
 four candidate alphas completed in approximately **1.5–1.6 seconds** after
@@ -71,6 +78,36 @@ long. This target is intentionally opt-in in the benchmark script.
 The benchmark scripts under `test/` measure both cached alpha-hull components
 and end-to-end construction at fixed random seeds. They are designed for
 revision-to-revision comparisons on the same machine.
+
+### Full Rosales workflow
+
+The Julia GBIF workflow was run with eight Julia threads on 1,063,070 cleaned
+records and 9,263 species. It produced 9,263 successful species ranges (7,519
+alpha-hull tasks and 1,744 direct sparse-species tasks) and 763,715 species-grid
+rows. End-to-end time was **211.46 s**, including **191.54 s** for range
+construction. This is a Julia workflow measurement, not an R comparison.
+
+The interactive workflow script is intentionally ignored by Git in this
+repository. With the local data paths adjusted as needed, the run is:
+
+```powershell
+@'
+include(raw"C:\path\to\alphahull\R\build_species_alpha_hull_1deg_ranges_gbif.jl")
+using .RangeBuilderWorkflow
+run_family_ranges(
+    grid_path=raw"C:\path\to\alphahull\R\1d\1.shp",
+    occurrence_file=raw"E:\Rosales\native_records.csv.gz",
+    output_directory=raw"C:\path\to\alphahull\R\output\1deg_ranges",
+    family="Rosales", workers=8, overwrite=true,
+    buffer_m=10_000, fraction=0.95, part_count=3,
+    initial_alpha=2, alpha_increment=1, alpha_cap=400,
+    clip_to_coast=:terrestrial,
+)
+'@ | julia -t 8 --project=R/julia -
+```
+
+The run writes `all_species_range_summary.csv`, the species-grid distribution,
+and `workflow_timings.csv` to the selected output directory.
 
 ## Use
 
