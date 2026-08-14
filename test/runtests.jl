@@ -203,3 +203,18 @@ holey_poly = GeoInterface.Wrappers.Polygon(
 holey_pts = [3.0 5.0; 5.0 5.0; 5.0 0.0; 15.0 5.0; 0.0 5.0; 3.0 3.0]
 @test RangeBuilder._range_points_in_polygon(holey_pts, holey_poly) == [true, false, true, false, true, true]
 @test RangeBuilder._range_points_in_polygon(holey_pts, nothing) == falses(6)
+
+# _range_native_context: eqearth projection matches R sf::st_transform (plan Task 5)
+proj_refs = [
+    (0.0, 0.0, 0.0, 0.0),
+    (90.0, 45.0, 7396237.3744978, 5466867.76021372),
+    (-120.0, -30.0, -10758407.9263306, -3764325.42689213),
+    (179.0, 80.0, 10585770.1667077, 8205603.09648845),
+    (45.0, 0.0, 4310989.76555424, 0.0),
+]
+proj_ctx = RangeBuilder._range_native_context()
+for (lon, lat, rx, ry) in proj_refs
+    px, py = proj_ctx.forward(lon, lat)
+    @test isapprox(px, rx; rtol=1e-7)
+    @test isapprox(py, ry; rtol=1e-7)
+end
