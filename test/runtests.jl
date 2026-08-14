@@ -83,6 +83,12 @@ dynamic_buffered = getDynamicAlphaHull(pts; fraction=0.8, partCount=3, buff=1000
                                        alphaCap=2, clipToCoast=:no)
 @test dynamic_buffered.alpha == "alpha0.8"
 
+buffer_precision_source = GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (0.01, 0.0),
+                                                           (0.01, 0.01), (0.0, 0.01),
+                                                           (0.0, 0.0)]]; crs=4326)
+buffer_precision = RangeBuilder._buffer_range(buffer_precision_source, 1000; force=true)
+@test GeoInterface.npoint(buffer_precision) == 45
+
 buffer_components = [
     GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (0.01, 0.0),
                                     (0.01, 0.01), (0.0, 0.01),

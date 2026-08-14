@@ -1,5 +1,8 @@
 const _range_world_cache = Dict{Int,Any}()
 const _range_land_path = normpath(joinpath(@__DIR__, "..", "geodata", "ne_50m_land.jld2"))
+# Match terra::buffer(), which approximates circular arcs with ten segments
+# per quadrant. This affects only the polygonal approximation of a buffer.
+const _R_BUFFER_QUADRANT_SEGMENTS = 10
 
 mutable struct _RangeProjTransforms
     context::Ptr{Proj.PJ_CONTEXT}
@@ -143,7 +146,13 @@ function _buffer_range(poly, distance::Real; force::Bool=false, native=nothing)
             context=geos,
         )
         GeometryOps.reproject(
-            LibGEOS.bufferWithStyle(projected_geos, Float64(distance); context=geos), inverse;
+            LibGEOS.bufferWithStyle(
+                projected_geos,
+                Float64(distance);
+                quadsegs=_R_BUFFER_QUADRANT_SEGMENTS,
+                context=geos,
+            ),
+            inverse;
             target_crs="EPSG:4326"
         )
     end
