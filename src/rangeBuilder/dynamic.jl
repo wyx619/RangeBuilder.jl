@@ -47,6 +47,23 @@ function _unique_finite_coordinates(points::AbstractMatrix)
     return isempty(rows) ? zeros(Float64, 0, 2) : reduce(vcat, ([p[1] p[2]] for p in rows))
 end
 
+function _range_shuffle_collinear(points::AbstractMatrix; rng=Random.MersenneTwister(0))
+    # R rangeBuilder reshuffles all rows while the first three rows share an
+    # exact x or y coordinate, so the Delaunay step is not collinear. R has no
+    # loop bound; cap the attempts here to guarantee termination.
+    size(points, 1) >= 3 || return points
+    for _ in 1:100
+        first_three = points[1:3, :]
+        if first_three[1, 1] == first_three[2, 1] == first_three[3, 1] ||
+           first_three[1, 2] == first_three[2, 2] == first_three[3, 2]
+            points = points[Random.randperm(rng, size(points, 1)), :]
+        else
+            return points
+        end
+    end
+    return points
+end
+
 function _polygon_count(poly)
     isnothing(poly) && return 0
     trait = GeoInterface.geomtrait(poly)

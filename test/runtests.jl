@@ -164,3 +164,17 @@ mixed_stack = rasterStackFromPolyList((square=square, tiny=tiny);
 @test occursin("AHull", sprint(show, ah))
 @test occursin("complement", sprint(show, MIME"text/plain"(), ah))
 @test occursin("CircleIntersection", sprint(show, ci))
+
+# _range_shuffle_collinear: R-style collinear preprocessing (plan Task 1)
+collinear_rows = [0.0 0.0; 1.0 0.0; 2.0 0.0; 0.0 1.0]  # first three rows share y == 0
+shuffled_rows = RangeBuilder._range_shuffle_collinear(collinear_rows; rng=MersenneTwister(0))
+@test !(shuffled_rows[1, 1] == shuffled_rows[2, 1] == shuffled_rows[3, 1])
+@test !(shuffled_rows[1, 2] == shuffled_rows[2, 2] == shuffled_rows[3, 2])
+@test Set(Tuple.(eachrow(shuffled_rows))) == Set(Tuple.(eachrow(collinear_rows)))
+collinear_cols = [0.0 0.0; 0.0 1.0; 0.0 2.0; 1.0 0.0]  # first three rows share x == 0
+shuffled_cols = RangeBuilder._range_shuffle_collinear(collinear_cols; rng=MersenneTwister(0))
+@test !(shuffled_cols[1, 1] == shuffled_cols[2, 1] == shuffled_cols[3, 1])
+@test !(shuffled_cols[1, 2] == shuffled_cols[2, 2] == shuffled_cols[3, 2])
+non_collinear_rows = [0.0 0.0; 1.0 1.0; 2.0 0.0]
+@test RangeBuilder._range_shuffle_collinear(non_collinear_rows) == non_collinear_rows
+@test RangeBuilder._range_shuffle_collinear(pts; rng=MersenneTwister(0)) == pts
