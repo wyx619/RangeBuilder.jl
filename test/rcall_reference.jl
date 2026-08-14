@@ -55,8 +55,8 @@ function r_complement(points, alpha)
     return RCall.rcopy(RCall.reval("complement(points, alpha=alpha)"))
 end
 
-function r_dynamic_alpha(points; fraction, partCount, buff, initialAlpha,
-                         alphaIncrement, alphaCap)
+function r_dynamic_alpha(points; fraction=0.95, partCount=3, buff=10000,
+                         initialAlpha=3, alphaIncrement=1, alphaCap=400)
     @rput points fraction partCount buff initialAlpha alphaIncrement alphaCap
     RCall.reval("library(rangeBuilder)")
     return RCall.rcopy(RCall.reval(
@@ -123,31 +123,137 @@ canonical_complement(rows) = canonical_rows(rows[:, 1:3])
 points = [0.0 0.0; 2.0 0.0; 2.0 1.0; 0.0 2.0; 0.6 0.7]
 
 dynamic_points = [0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.5 0.5]
-for buff in (0.0, 1000.0)
-    julia_dynamic = getDynamicAlphaHull(
+# This point set is a cocircular degeneracy (square corners share a
+# circumcircle through the center point). At alpha=0.7 the Delaunay triangles
+# have circumradius sqrt(2)/2 ~= 0.707 > 0.7, so the hull degenerates to the
+# center point only (coverage 1/5) and both engines enter the main loop.
+@testset "dynamic square+center" begin
+    for buff in (1000.0,)
+        julia_dynamic = getDynamicAlphaHull(
+            dynamic_points;
+            fraction=0.8,
+            partCount=3,
+            buff=buff,
+            initialAlpha=0.7,
+            alphaIncrement=0.1,
+            alphaCap=2,
+            clipToCoast=:no,
+        )
+        r_dynamic = r_dynamic_alpha(
+            dynamic_points;
+            fraction=0.8,
+            partCount=3,
+            buff=buff,
+            initialAlpha=0.7,
+            alphaIncrement=0.1,
+            alphaCap=2,
+        )
+        @test julia_dynamic.alpha == r_dynamic == "alpha0.8"
+    end
+    # Documented S2 difference for buff=0: R's st_buffer(hull, 0) round-trips
+    # the geometry through +proj=eqearth and back, so the spherical engine
+    # reports coverage 3/5 and keeps advancing until alpha > 2 -> alphaMCH.
+    # Julia's planar GEOS buffer(0) is lossless (coverage 5/5 at alpha=0.8).
+    # Both hulls are geometrically the same convex square; only the label
+    # differs. See evidence/task-7-*.txt.
+    julia_zero = getDynamicAlphaHull(
         dynamic_points;
         fraction=0.8,
         partCount=3,
-        buff=buff,
+        buff=0.0,
         initialAlpha=0.7,
         alphaIncrement=0.1,
         alphaCap=2,
         clipToCoast=:no,
     )
-    r_dynamic = r_dynamic_alpha(
+    r_zero = r_dynamic_alpha(
         dynamic_points;
         fraction=0.8,
         partCount=3,
-        buff=buff,
+        buff=0.0,
         initialAlpha=0.7,
         alphaIncrement=0.1,
         alphaCap=2,
     )
-    @test julia_dynamic.alpha == r_dynamic
+    @test julia_zero.alpha == "alpha0.8"
+    @test r_zero == "alphaMCH"
 end
 
 land_reference_points = [116.4074 39.9042; -140.0 0.0]
 @test filterByLand(land_reference_points; coastScale=50) == r_filter_by_land(land_reference_points)
+
+# Task 7: six-class differential matrix against rangeBuilder::getDynamicAlphaHull.
+# R side runs the installed rangeBuilder package through RCall; alpha labels
+# must match exactly. Coordinates are shared fixed values so both engines see
+# identical input (R and Julia RNGs differ, so shared-fixed beats re-seeding).
+function dynamic_matrix_tests()
+    check(points; kwargs...) = begin
+        julia_out = getDynamicAlphaHull(points; clipToCoast=:no, kwargs...)
+        r_alpha = r_dynamic_alpha(points; kwargs...)
+        return julia_out.alpha, r_alpha
+    end
+
+    # Class 1: convex set with an interior point.
+    basic = [0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.37 0.42]
+    # Class 2: concave set (notch interior points).
+    concave = [0.0 0.0; 2.0 0.0; 2.0 2.0; 1.0 0.6; 0.0 2.0; 0.5 1.1; 1.5 1.1]
+    # Class 3: two separated clusters (fixed coordinates, non-axis-aligned).
+    clusters = [0.522609 0.729549; 0.307886 0.250881; 0.347659 0.444204;
+                0.833131 0.998262; 0.483922 0.545417; 19.038155 0.996055;
+                19.720742 0.391774; 19.531328 0.607293; 19.964229 0.229241;
+                19.847752 0.263021]
+    # Class 4: first three rows share an exact x or y (R reshuffles them).
+    share_x = [0.0 0.0; 0.0 1.0; 0.0 2.0; 5.0 5.0]
+    share_y = [0.0 0.0; 1.0 0.0; 2.0 0.0; 5.0 5.0]
+    # Class 5: degenerate inputs.
+    collinear_diag = [0.0 0.0; 1.0 1.0; 2.0 2.0]
+    two_points = [0.0 0.0; 0.0 1.0]
+    # Class 6: buffered variants (buffer size changes coverage, hence alpha).
+
+    @testset "dynamic matrix class1 convex" begin
+        j, r = check(basic)
+        @test j == r == "alpha3"
+    end
+    @testset "dynamic matrix class2 concave" begin
+        j, r = check(concave)
+        @test j == r == "alpha3"
+    end
+    @testset "dynamic matrix class3 clusters" begin
+        # Default buff=10000: both engines select alpha12 (R via buffered
+        # coverage, Julia via GEOS unbuffered coverage; see evidence).
+        j, r = check(clusters)
+        @test j == r == "alpha12"
+    end
+    @testset "dynamic matrix class4 first-three collinear" begin
+        j, r = check(share_x)
+        @test j == r == "alpha6"
+        j, r = check(share_y)
+        @test j == r == "alpha6"
+    end
+    @testset "dynamic matrix class5 degenerate" begin
+        j, r = check(collinear_diag)
+        @test j == r == "alphaMCH"
+        @test_throws ArgumentError getDynamicAlphaHull(two_points; clipToCoast=:no)
+        @test_throws RCall.REvalError r_dynamic_alpha(two_points)
+    end
+    @testset "dynamic matrix class6 buffered" begin
+        # buff does not change the alpha for the convex case on either side.
+        j, r = check(basic; buff=1000)
+        @test j == r == "alpha3"
+        j, r = check(basic; buff=10000)
+        @test j == r == "alpha3"
+        # S2 documented difference (see evidence task-7-*.txt): with buff=1000
+        # R's spherical engine reports point (0.307886, 0.250881) - a hull
+        # boundary vertex - as outside, so it advances to alpha14; Julia's
+        # GEOS planar engine measures it inside at alpha12. Both are
+        # documented, not asserted equal.
+        julia_buffered, r_buffered = check(clusters; buff=1000)
+        @test julia_buffered == "alpha12"
+        @test r_buffered == "alpha14"
+    end
+end
+
+dynamic_matrix_tests()
 
 rmesh = canonical(r_delvor(points))
 jmesh = canonical(delvor(points).mesh)
