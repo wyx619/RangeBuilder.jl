@@ -25,27 +25,73 @@ function _orient_arc_samples(samples::AbstractMatrix, row::AbstractVector,
     return samples
 end
 
+function _arc_components(h::AHull, rows::Vector{Int})
+    # Equivalent to the endpoint-reordering state machine in R's ah2sf:
+    # repeatedly attach an unused arc by its start endpoint, or by reversing
+    # an arc whose end endpoint matches the current end.
+    used = falses(size(h.arcs, 1))
+    components = Vector{Vector{Tuple{Int,Bool}}}()
+    for first_row in rows
+        used[first_row] && continue
+        used[first_row] = true
+        component = Tuple{Int,Bool}[(first_row, false)]
+        endpoint = Int(round(h.arcs[first_row, 8]))
+        while true
+            next_row = nothing
+            reverse = false
+            for candidate in rows
+                used[candidate] && continue
+                if Int(round(h.arcs[candidate, 7])) == endpoint
+                    next_row = candidate
+                    break
+                end
+            end
+            if isnothing(next_row)
+                for candidate in rows
+                    used[candidate] && continue
+                    if Int(round(h.arcs[candidate, 8])) == endpoint
+                        next_row = candidate
+                        reverse = true
+                        break
+                    end
+                end
+            end
+            isnothing(next_row) && break
+            row = Int(next_row)
+            used[row] = true
+            push!(component, (row, reverse))
+            endpoint = reverse ? Int(round(h.arcs[row, 7])) : Int(round(h.arcs[row, 8]))
+        end
+        push!(components, component)
+    end
+    return components
+end
+
 function _join_arc_components(rows::Vector{Int}, h::AHull;
                               increment::Real, rnd::Integer, tol::Real)
     components = Vector{Vector{Tuple{Float64,Float64}}}()
     isempty(rows) && return components
-    current = Tuple{Float64,Float64}[]
-    previous_end = 0
-    for (position, i) in enumerate(rows)
-        row = h.arcs[i, :]
-        samples = _orient_arc_samples(_ahull_arc_samples(row; increment, rnd), row, h.xahull)
-        points = [(Float64(p[1]), Float64(p[2])) for p in eachrow(samples)]
-        if position == 1 || Int(round(row[7])) == previous_end
-            isempty(current) || append!(current, points[2:end])
-            isempty(current) && append!(current, points)
-        else
-            length(current) >= 3 && push!(components, current)
-            current = copy(points)
+    for component_order in _arc_components(h, rows)
+        current = Tuple{Float64,Float64}[]
+        previous_end = 0
+        for (position_in_component, (i, flipped)) in enumerate(component_order)
+            row = copy(h.arcs[i, :])
+            if flipped
+                row[7], row[8] = row[8], row[7]
+            end
+            samples = _orient_arc_samples(_ahull_arc_samples(row; increment, rnd), row, h.xahull)
+            points = [(Float64(p[1]), Float64(p[2])) for p in eachrow(samples)]
+            if position_in_component == 1 || Int(round(row[7])) == previous_end
+                isempty(current) || append!(current, points[2:end])
+                isempty(current) && append!(current, points)
+            else
+                length(current) >= 3 && push!(components, current)
+                current = copy(points)
+            end
+            previous_end = Int(round(row[8]))
         end
-        previous_end = Int(round(row[8]))
+        length(current) >= 3 && push!(components, current)
     end
-    length(current) >= 3 && push!(components, current)
-
     # R closes rings explicitly.  Remove a duplicate terminal point before
     # closure so wrapper geometry receives one and only one closing vertex.
     for ring in components
