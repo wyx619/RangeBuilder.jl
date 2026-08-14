@@ -75,7 +75,7 @@ therefore an indicative single-run comparison (*), not an R median; a full
 seven-repeat R median is intentionally omitted because it is prohibitively
 long. This target is intentionally opt-in in the benchmark script.
 
-The benchmark scripts under `test/` measure both cached alpha-hull components
+The benchmark scripts under `benchmark/` measure both cached alpha-hull components
 and end-to-end construction at fixed random seeds. They are designed for
 revision-to-revision comparisons on the same machine.
 
@@ -202,35 +202,40 @@ device. Similarly, `dw_track` and `ahull_track` return a vector of sampled
 arc-coordinate matrices instead of R `ggplot2` layers. They accept an `rng`
 keyword for reproducible sampling.
 
-The Delaunay implementations use different internal traversal orders in R and
-Julia. For non-degenerate inputs the resulting geometry is equivalent, though
-the order of Delaunay rows and inserted alpha-hull endpoint ids can differ.
+For ordinary inputs the R and Julia triangulations yield equivalent geometry.
+For cocircular or near-degenerate inputs, Delaunay triangulations are not
+unique: R and Julia may select different valid diagonals, so internal mesh and
+arc row order are not part of the compatibility contract.
 
 ## Verification
 
 ```powershell
 julia --project=. -e "using Pkg; Pkg.test()"
-julia --project=test test/rcall_reference.jl
-julia --project=. test/benchmark_core.jl
-julia --project=. test/benchmark_end_to_end.jl
-Rscript test/benchmark_end_to_end.R
-julia --project=test test/benchmark_dynamic_reference.jl 500 1000
+julia --project=test test/reference_r.jl
+julia --project=. benchmark/core.jl
+julia --project=. benchmark/end_to_end.jl
+Rscript benchmark/end_to_end.R
+julia --project=test benchmark/dynamic_reference.jl 500 1000
 ```
 
-The RCall reference script compares against the installed `alphahull` R
-package, not the repository source files. RCall is isolated in
-`test/Project.toml`, so it is not a runtime dependency of RangeBuilder.jl.
+`test/runtests.jl` only runs pure Julia unit, workflow, and regression tests.
+`test/reference_r.jl` is an optional development-only semantic comparison
+against the locally installed original `alphahull` and `rangeBuilder` R
+packages. It canonicalizes ordinary mesh and arc geometry; it intentionally
+does not require matching row order for cocircular or near-degenerate inputs.
+RCall is isolated in `test/Project.toml`, so it is not a runtime dependency of
+RangeBuilder.jl.
 
-`benchmark_core.jl` warms up Julia and reports median time and allocation for
+`benchmark/core.jl` warms up Julia and reports median time and allocation for
 `delvor`, `ashape`, `complement`, `ahull`, and `dw` at fixed random seeds.
 The benchmark is intended for comparing revisions on the same machine, not
 for cross-machine timing claims.
 
-`benchmark_end_to_end.jl` and `benchmark_end_to_end.R` use the same
+`benchmark/end_to_end.jl` and `benchmark/end_to_end.R` use the same
 deterministic point sets for a warm end-to-end comparison of `ahull` plus
 area evaluation.
 
-`benchmark_dynamic_reference.jl` compares `getDynamicAlphaHull` with the
+`benchmark/dynamic_reference.jl` compares `getDynamicAlphaHull` with the
 installed original R `rangeBuilder` package through RCall. RCall is confined
 to the test environment and remains outside the package's runtime
 dependencies. With no arguments it runs the 500- and 1,000-point reference

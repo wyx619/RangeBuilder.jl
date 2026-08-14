@@ -26,45 +26,68 @@ function _orient_arc_samples(samples::AbstractMatrix, row::AbstractVector,
 end
 
 function _arc_components(h::AHull, rows::Vector{Int})
-    # Equivalent to the endpoint-reordering state machine in R's ah2sf:
-    # repeatedly attach an unused arc by its start endpoint, or by reversing
-    # an arc whose end endpoint matches the current end.
-    used = falses(size(h.arcs, 1))
-    components = Vector{Vector{Tuple{Int,Bool}}}()
-    for first_row in rows
-        used[first_row] && continue
-        used[first_row] = true
-        component = Tuple{Int,Bool}[(first_row, false)]
-        endpoint = Int(round(h.arcs[first_row, 8]))
-        while true
-            next_row = nothing
-            reverse = false
-            for candidate in rows
-                used[candidate] && continue
-                if Int(round(h.arcs[candidate, 7])) == endpoint
-                    next_row = candidate
-                    break
-                end
-            end
-            if isnothing(next_row)
-                for candidate in rows
-                    used[candidate] && continue
-                    if Int(round(h.arcs[candidate, 8])) == endpoint
-                        next_row = candidate
-                        reverse = true
-                        break
-                    end
-                end
-            end
-            isnothing(next_row) && break
-            row = Int(next_row)
-            used[row] = true
-            push!(component, (row, reverse))
-            endpoint = reverse ? Int(round(h.arcs[row, 7])) : Int(round(h.arcs[row, 8]))
+    # This is the reorder loop in R rangeBuilder::ah2sf.  It operates on the
+    # complete arc table (including r == 0 rows), then ah2sf removes those
+    # rows before sampling.  A greedy endpoint walk is not equivalent when a
+    # table contains several disconnected components or a reversed arc.
+    n = length(rows)
+    n == 0 && return Vector{Vector{Tuple{Int,Bool}}}()
+    order = copy(rows)
+    starts = [Int(round(h.arcs[row, 7])) for row in order]
+    ends = [Int(round(h.arcs[row, 8])) for row in order]
+    flipped = falses(n)
+    k = 1
+    while k < n
+        current_end = ends[k]
+        future = (k + 1):n
+        next_start = starts[k + 1]
+        if current_end == next_start
+            k += 1
+            continue
         end
-        push!(components, component)
+        end_in_future_starts = current_end in starts[future]
+        end_in_future_ends = current_end in ends[future]
+        if !end_in_future_starts && !end_in_future_ends
+            k += 1
+            continue
+        end
+        if end_in_future_starts && !end_in_future_ends
+            m = findfirst(==(current_end), starts[future]) + k
+            row = order[m]
+            start = starts[m]
+            endpoint = ends[m]
+            flip = flipped[m]
+            deleteat!(order, m)
+            deleteat!(starts, m)
+            deleteat!(ends, m)
+            deleteat!(flipped, m)
+            insert!(order, k + 1, row)
+            insert!(starts, k + 1, start)
+            insert!(ends, k + 1, endpoint)
+            insert!(flipped, k + 1, flip)
+            continue
+        end
+        if !end_in_future_starts && end_in_future_ends
+            m = findfirst(==(current_end), ends[future]) + k
+            starts[m], ends[m] = ends[m], starts[m]
+            flipped[m] = !flipped[m]
+            row = order[m]
+            start = starts[m]
+            endpoint = ends[m]
+            flip = flipped[m]
+            deleteat!(order, m)
+            deleteat!(starts, m)
+            deleteat!(ends, m)
+            deleteat!(flipped, m)
+            insert!(order, k + 1, row)
+            insert!(starts, k + 1, start)
+            insert!(ends, k + 1, endpoint)
+            insert!(flipped, k + 1, flip)
+            continue
+        end
+        k += 1
     end
-    return components
+    return [collect(zip(order, flipped))]
 end
 
 function _join_arc_components(rows::Vector{Int}, h::AHull;
@@ -78,6 +101,8 @@ function _join_arc_components(rows::Vector{Int}, h::AHull;
     for component_order in _arc_components(h, rows)
         append!(order, component_order)
     end
+    # ah2sf filters r <= 0 only after its endpoint reorder state machine.
+    order = [(i, flipped) for (i, flipped) in order if h.arcs[i, 3] > 0]
     # Join arcs by coordinate continuity, exactly as R does:
     #  * an arc whose first sample is continuous with the current line's last
     #    sample is appended (minus its duplicated first point);
@@ -93,7 +118,10 @@ function _join_arc_components(rows::Vector{Int}, h::AHull;
         if flipped
             row[7], row[8] = row[8], row[7]
         end
-        samples = _orient_arc_samples(_ahull_arc_samples(row; increment, rnd), row, h.xahull)
+        samples = _ahull_arc_samples(row; increment, rnd)
+        # R ah2sf reverses the sampled angle sequence exactly when the
+        # endpoint state machine marked this row as flipped.
+        flipped && (samples = Base.reverse(samples; dims=1))
         points = [(Float64(p[1]), Float64(p[2])) for p in eachrow(samples)]
         if isempty(current)
             append!(current, points)
@@ -137,7 +165,9 @@ function ah2polygon(h::AHull; increment::Real=360, rnd::Integer=10,
     increment > 0 || throw(ArgumentError("increment must be positive"))
     rnd >= 0 || throw(ArgumentError("rnd must be nonnegative"))
     tol >= 0 || throw(ArgumentError("tol must be nonnegative"))
-    rows = findall(>(0), h.arcs[:, 3])
+    # Keep point-only r == 0 rows through endpoint reordering; R filters them
+    # only after the state machine has finished.
+    rows = collect(axes(h.arcs, 1))
     components = _join_arc_components(rows, h; increment, rnd, tol)
     isempty(components) && return nothing
     wrappers = GeoInterface.Wrappers

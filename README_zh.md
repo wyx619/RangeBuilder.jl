@@ -56,7 +56,7 @@ Delaunay/Voronoi 构建，以及动态 alpha 搜索中对候选值的反复评�
 单次 R 对照的指示性结果（*），不是 R 的中位数；完整 7 次 R 中位数耗时过长，
 故未声称或报告。
 
-`test/` 中的基准脚本覆盖缓存后的 alpha-hull 组件与端到端构建，并使用固定随机种子，
+`benchmark/` 中的基准脚本覆盖缓存后的 alpha-hull 组件与端到端构建，并使用固定随机种子，
 适合比较同一台机器上的不同修订版本。
 
 ### Rosales 全量工作流
@@ -163,30 +163,34 @@ fig
 `arc()` 返回采样坐标，不会向图形设备绘图。`dw_track()` 与 `ahull_track()` 同样返回
 采样圆弧坐标矩阵的向量，而不是 R `ggplot2` 图层；二者都接受 `rng` 关键字以实现可重复抽样。
 
-R 与 Julia 的 Delaunay 内部遍历顺序不同。对非退化输入，得到的几何结果等价；但
-Delaunay 矩阵行顺序与插入的 alpha-hull 端点编号可能不同。
+对普通输入，R 与 Julia 的三角剖分得到等价的几何结果。对共圆或近退化输入，
+Delaunay 三角剖分本来就不唯一；R 与 Julia 可能选择不同但均合法的对角线，
+因此内部网格和圆弧行顺序不属于兼容性承诺。
 
 ## 验证与复现
 
 ```powershell
 julia --project=. -e "using Pkg; Pkg.test()"
-julia --project=test test/rcall_reference.jl
-julia --project=. test/benchmark_core.jl
-julia --project=. test/benchmark_end_to_end.jl
-Rscript test/benchmark_end_to_end.R
-julia --project=test test/benchmark_dynamic_reference.jl 500 1000
+julia --project=test test/reference_r.jl
+julia --project=. benchmark/core.jl
+julia --project=. benchmark/end_to_end.jl
+Rscript benchmark/end_to_end.R
+julia --project=test benchmark/dynamic_reference.jl 500 1000
 ```
 
-`rcall_reference.jl` 对照已安装的 R `alphahull` 包，而不是仓库中的 R 源码。
-RCall 被隔离在 `test/Project.toml`，不属于 RangeBuilder.jl 的运行时依赖。
+`test/runtests.jl` 只运行纯 Julia 的单元、工作流与回归测试。
+`test/reference_r.jl` 是可选的开发期语义对照，调用本机安装的原始 R `alphahull`
+与 `rangeBuilder` 包；它对普通输入规范化比较网格与圆弧几何，而不会要求共圆或
+近退化输入具有相同的行顺序。RCall 被隔离在 `test/Project.toml`，不属于
+RangeBuilder.jl 的运行时依赖。
 
-`benchmark_core.jl` 会热身 Julia，并在固定随机种子下报告 `delvor`、`ashape`、
+`benchmark/core.jl` 会热身 Julia，并在固定随机种子下报告 `delvor`、`ashape`、
 `complement`、`ahull` 与 `dw` 的中位时间和分配量。该基准用于同机版本间比较，
 不应用于跨机器的绝对性能结论。
 
-`benchmark_end_to_end.jl` 与 `benchmark_end_to_end.R` 使用相同的确定性点集，
+`benchmark/end_to_end.jl` 与 `benchmark/end_to_end.R` 使用相同的确定性点集，
 比较 `ahull` 加面积计算的端到端耗时。
 
-`benchmark_dynamic_reference.jl` 通过 RCall 对照 `getDynamicAlphaHull()` 与已安装的
+`benchmark/dynamic_reference.jl` 通过 RCall 对照 `getDynamicAlphaHull()` 与已安装的
 原始 R `rangeBuilder`。RCall 仅用于测试环境，并非包的运行时依赖。无参数时该脚本运行
 500 与 1,000 点参考情形。
