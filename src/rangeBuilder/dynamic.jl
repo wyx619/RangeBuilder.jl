@@ -64,6 +64,40 @@ function _range_shuffle_collinear(points::AbstractMatrix; rng=Random.MersenneTwi
     return points
 end
 
+function _closest_point_pair(points::AbstractMatrix)
+    best_i, best_j, best_d2 = 1, 2, Inf
+    for i in 1:size(points, 1), j in (i + 1):size(points, 1)
+        dx = points[i, 1] - points[j, 1]
+        dy = points[i, 2] - points[j, 2]
+        d2 = dx * dx + dy * dy
+        if d2 < best_d2
+            best_i, best_j, best_d2 = i, j, d2
+        end
+    end
+    return best_i, best_j
+end
+
+function _range_drop_duplicate_points(points::AbstractMatrix)
+    # Mirrors R rangeBuilder::getDynamicAlphaHull: while the Delaunay step
+    # fails with a "duplicate data points" error, drop the closest point pair
+    # and retry. Other failures (e.g. collinear input) are not retried here;
+    # the caller falls back through its alpha loop exactly as R does.
+    current = points
+    while size(current, 1) >= 3
+        result = try
+            delvor(current)
+        catch e
+            e isa ArgumentError && occursin("duplicate data points", sprint(showerror, e)) ?
+                nothing : return nothing
+        end
+        result !== nothing && return result
+        i, j = _closest_point_pair(current)
+        keep = [k for k in axes(current, 1) if k != i]
+        current = current[keep, :]
+    end
+    return nothing
+end
+
 function _polygon_count(poly)
     isnothing(poly) && return 0
     trait = GeoInterface.geomtrait(poly)

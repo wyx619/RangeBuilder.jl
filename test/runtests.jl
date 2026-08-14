@@ -178,3 +178,12 @@ shuffled_cols = RangeBuilder._range_shuffle_collinear(collinear_cols; rng=Mersen
 non_collinear_rows = [0.0 0.0; 1.0 1.0; 2.0 0.0]
 @test RangeBuilder._range_shuffle_collinear(non_collinear_rows) == non_collinear_rows
 @test RangeBuilder._range_shuffle_collinear(pts; rng=MersenneTwister(0)) == pts
+
+# _range_drop_duplicate_points: R-style duplicate-point drop (plan Task 2)
+exact_dup_input = [0.0 0.0; 0.0 0.0; 1.0 1.0; 0.0 2.0]
+dropped_dv = RangeBuilder._range_drop_duplicate_points(exact_dup_input)
+@test dropped_dv !== nothing
+@test size(dropped_dv.x, 1) == 3
+@test RangeBuilder._range_drop_duplicate_points([0.0 0.0; 1e-10 1e-10; 2e-10 2e-10]) === nothing
+near_noncollinear = [0.0 0.0; 1e-13 0.0; 1.0 1.0; 0.0 2.0]
+@test RangeBuilder._range_drop_duplicate_points(near_noncollinear) !== nothing
