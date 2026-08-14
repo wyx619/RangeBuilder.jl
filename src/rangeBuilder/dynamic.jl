@@ -1,8 +1,10 @@
 const _range_world_cache = Dict{Int,Any}()
 const _range_land_path = normpath(joinpath(@__DIR__, "..", "geodata", "ne_50m_land.jld2"))
-# Match terra::buffer(), which approximates circular arcs with ten segments
-# per quadrant. This affects only the polygonal approximation of a buffer.
-const _R_BUFFER_QUADRANT_SEGMENTS = 10
+# Match R sf::st_buffer(), whose default nQuadSegs is 30 (sf >= 2.0).
+# The R reference getDynamicAlphaHull calls st_buffer without overriding
+# nQuadSegs, so 30 segments per quadrant is the faithful equivalent.
+# This affects only the polygonal approximation of a buffer.
+const _R_BUFFER_QUADRANT_SEGMENTS = 30
 
 mutable struct _RangeProjTransforms
     context::Ptr{Proj.PJ_CONTEXT}

@@ -71,36 +71,60 @@ function _join_arc_components(rows::Vector{Int}, h::AHull;
                               increment::Real, rnd::Integer, tol::Real)
     components = Vector{Vector{Tuple{Float64,Float64}}}()
     isempty(rows) && return components
+    # R ah2sf reorders the arc table with a state machine, then joins arcs in
+    # one pass over that reordered sequence.  `_arc_components` reproduces the
+    # reordering; flattening its component orders yields the same sequence.
+    order = Tuple{Int,Bool}[]
     for component_order in _arc_components(h, rows)
-        current = Tuple{Float64,Float64}[]
-        previous_end = 0
-        for (position_in_component, (i, flipped)) in enumerate(component_order)
-            row = copy(h.arcs[i, :])
-            if flipped
-                row[7], row[8] = row[8], row[7]
-            end
-            samples = _orient_arc_samples(_ahull_arc_samples(row; increment, rnd), row, h.xahull)
-            points = [(Float64(p[1]), Float64(p[2])) for p in eachrow(samples)]
-            if position_in_component == 1 || Int(round(row[7])) == previous_end
-                isempty(current) || append!(current, points[2:end])
-                isempty(current) && append!(current, points)
-            else
-                length(current) >= 3 && push!(components, current)
-                current = copy(points)
-            end
-            previous_end = Int(round(row[8]))
-        end
-        length(current) >= 3 && push!(components, current)
+        append!(order, component_order)
     end
-    # R closes rings explicitly.  Remove a duplicate terminal point before
-    # closure so wrapper geometry receives one and only one closing vertex.
-    for ring in components
-        if length(ring) > 1 && hypot(ring[1][1] - ring[end][1], ring[1][2] - ring[end][2]) <= tol
-            pop!(ring)
+    # Join arcs by coordinate continuity, exactly as R does:
+    #  * an arc whose first sample is continuous with the current line's last
+    #    sample is appended (minus its duplicated first point);
+    #  * a discontinuous arc closes the current line and is itself dropped
+    #    (its samples never enter a line), matching R's `prevx <- NULL`;
+    #  * a line is closed by replacing its last sample with its first sample,
+    #    as R does with `prevx[length(prevx)] <- prevx[1]`; the final arc in
+    #    the sequence closes only when it is continuous.
+    current = Tuple{Float64,Float64}[]
+    n = length(order)
+    for (position, (i, flipped)) in enumerate(order)
+        row = copy(h.arcs[i, :])
+        if flipped
+            row[7], row[8] = row[8], row[7]
         end
-        push!(ring, ring[1])
+        samples = _orient_arc_samples(_ahull_arc_samples(row; increment, rnd), row, h.xahull)
+        points = [(Float64(p[1]), Float64(p[2])) for p in eachrow(samples)]
+        if isempty(current)
+            append!(current, points)
+        elseif _arc_samples_continuous(points[1], current[end]; rnd, tol)
+            append!(current, points[2:end])
+            if position == n
+                current[end] = current[1]
+                push!(components, current)
+            end
+        else
+            current[end] = current[1]
+            push!(components, current)
+            current = Tuple{Float64,Float64}[]
+        end
     end
+    # R's badLines step: after joining, any line with fewer than four points
+    # (sf::st_cast(line, "POINT") followed by nrow < 4) is removed.  This is
+    # what drops three-point degenerate rings that a pure endpoint-id join
+    # would otherwise retain.
+    filter!(line -> length(line) >= 4, components)
     return components
+end
+
+function _arc_samples_continuous(first::Tuple{Float64,Float64},
+                                 last::Tuple{Float64,Float64};
+                                 rnd::Integer, tol::Real)
+    (fx, fy) = first
+    (lx, ly) = last
+    x_ok = fx == round(lx; digits=rnd) || abs(fx - lx) < tol
+    y_ok = fy == round(ly; digits=rnd) || abs(fy - ly) < tol
+    return x_ok && y_ok
 end
 
 """Convert an alpha hull to a GeoInterface `Polygon` or `MultiPolygon`.

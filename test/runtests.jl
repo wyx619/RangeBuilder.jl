@@ -87,7 +87,9 @@ buffer_precision_source = GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (0.01, 0.0
                                                            (0.01, 0.01), (0.0, 0.01),
                                                            (0.0, 0.0)]]; crs=4326)
 buffer_precision = RangeBuilder._buffer_range(buffer_precision_source, 1000; force=true)
-@test GeoInterface.npoint(buffer_precision) == 45
+# sf::st_buffer default nQuadSegs is 30; a squared ring buffers to 4*30 + 5
+# points (4 segments per side plus the duplicated closing vertex).
+@test GeoInterface.npoint(buffer_precision) == 125
 
 buffer_components = [
     GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (0.01, 0.0),
