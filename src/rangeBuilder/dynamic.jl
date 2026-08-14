@@ -98,6 +98,25 @@ function _range_drop_duplicate_points(points::AbstractMatrix)
     return nothing
 end
 
+function _range_polygon_is_valid(poly, native=nothing)
+    # Topological validity via the same GEOS backend as R sf::st_is_valid.
+    # Every component must be valid, matching R's `all(st_is_valid(hull))`.
+    isnothing(poly) && return false
+    components = _polygon_components(poly)
+    isempty(components) && return false
+    transforms = isnothing(native) ? _range_native_context() : native
+    geos = transforms.geos
+    for component in components
+        trait = GeoInterface.geomtrait(component)
+        geom = GeoInterface.convert(
+            LibGEOS.geointerface_geomtype(trait), trait, component;
+            context=geos,
+        )
+        LibGEOS.isValid(geom, geos) || return false
+    end
+    return true
+end
+
 function _polygon_count(poly)
     isnothing(poly) && return 0
     trait = GeoInterface.geomtrait(poly)

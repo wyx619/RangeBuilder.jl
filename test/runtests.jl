@@ -187,3 +187,11 @@ dropped_dv = RangeBuilder._range_drop_duplicate_points(exact_dup_input)
 @test RangeBuilder._range_drop_duplicate_points([0.0 0.0; 1e-10 1e-10; 2e-10 2e-10]) === nothing
 near_noncollinear = [0.0 0.0; 1e-13 0.0; 1.0 1.0; 0.0 2.0]
 @test RangeBuilder._range_drop_duplicate_points(near_noncollinear) !== nothing
+
+# _range_polygon_is_valid: GEOS topological validity (plan Task 3)
+valid_poly = RangeBuilder.ah2polygon(RangeBuilder.ahull(pts; alpha=0.7))
+@test RangeBuilder._range_polygon_is_valid(valid_poly)
+bowtie = GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (1.0, 1.0), (1.0, 0.0),
+                                         (0.0, 1.0), (0.0, 0.0)]]; crs=4326)
+@test !RangeBuilder._range_polygon_is_valid(bowtie)
+@test !RangeBuilder._range_polygon_is_valid(nothing)
