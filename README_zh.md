@@ -175,12 +175,6 @@ julia --project=. test/benchmark_core.jl
 julia --project=. test/benchmark_end_to_end.jl
 Rscript test/benchmark_end_to_end.R
 julia --project=test test/benchmark_dynamic_reference.jl 500 1000
-
-# 耗时较长的大规模动态对照
-julia --project=test test/benchmark_dynamic_reference.jl 10000
-
-# 10,000 点大规模对照中，原始 R 的单次运行
-julia --project=test test/benchmark_dynamic_r_once.jl
 ```
 
 `rcall_reference.jl` 对照已安装的 R `alphahull` 包，而不是仓库中的 R 源码。
@@ -195,4 +189,4 @@ RCall 被隔离在 `test/Project.toml`，不属于 RangeBuilder.jl 的运行时�
 
 `benchmark_dynamic_reference.jl` 通过 RCall 对照 `getDynamicAlphaHull()` 与已安装的
 原始 R `rangeBuilder`。RCall 仅用于测试环境，并非包的运行时依赖。无参数时该脚本运行
-500 与 1,000 点参考情形；传入 `10000` 才会运行耗时很长的大规模对照。
+500 与 1,000 点参考情形。

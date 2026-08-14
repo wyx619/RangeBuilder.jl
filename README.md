@@ -215,12 +215,6 @@ julia --project=. test/benchmark_core.jl
 julia --project=. test/benchmark_end_to_end.jl
 Rscript test/benchmark_end_to_end.R
 julia --project=test test/benchmark_dynamic_reference.jl 500 1000
-
-# Long-running large dynamic comparison
-julia --project=test test/benchmark_dynamic_reference.jl 10000
-
-# One original-R run for the 10,000-point large comparison
-julia --project=test test/benchmark_dynamic_r_once.jl
 ```
 
 The RCall reference script compares against the installed `alphahull` R
@@ -240,4 +234,4 @@ area evaluation.
 installed original R `rangeBuilder` package through RCall. RCall is confined
 to the test environment and remains outside the package's runtime
 dependencies. With no arguments it runs the 500- and 1,000-point reference
-cases; pass `10000` explicitly for the long-running large comparison.
+cases.
