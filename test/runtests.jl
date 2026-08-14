@@ -218,3 +218,22 @@ for (lon, lat, rx, ry) in proj_refs
     @test isapprox(px, rx; rtol=1e-7)
     @test isapprox(py, ry; rtol=1e-7)
 end
+
+# getDynamicAlphaHull end-to-end parity with R rangeBuilder (plan Task 6).
+# Reference labels captured from R 4.6.1 rangeBuilder::getDynamicAlphaHull
+# (fraction=0.95, partCount=3, buff=10000, initialAlpha=3, inc=1, cap=400).
+ref_cases = [
+    ([0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.4 0.5], "alpha3"),
+    ([0.0 0.0; 2.0 0.0; 2.0 1.0; 0.0 2.0; 0.6 0.7], "alpha3"),
+    ([0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.5 0.5; 0.25 0.25], "alpha3"),
+    ([0.0 0.0; 0.0 1.0; 0.0 2.0; 5.0 5.0], "alpha6"),  # first 3 share x
+    ([0.0 0.0; 1.0 0.0; 2.0 0.0; 5.0 5.0], "alpha6"),  # first 3 share y
+]
+for (pts_ref, alpha_ref) in ref_cases
+    res_ref = RangeBuilder.getDynamicAlphaHull(pts_ref; clipToCoast=:no)
+    @test res_ref.alpha == alpha_ref
+end
+# 3 fully collinear points on a diagonal: R also escalates to alphaCap -> MCH
+# (R hangs instead when the first three points share x or y, see evidence).
+@test RangeBuilder.getDynamicAlphaHull([0.0 0.0; 1.0 1.0; 2.0 2.0]; clipToCoast=:no).alpha == "alphaMCH"
+@test_throws ArgumentError RangeBuilder.getDynamicAlphaHull([0.0 0.0; 0.0 1.0]; clipToCoast=:no)

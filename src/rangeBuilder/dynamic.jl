@@ -291,6 +291,13 @@ GeoInterface polygonal geometry and `alpha` is a string such as `"alpha7"`
 or `"alphaMCH"`. When several original R-style polygon features are buffered
 separately, `hull` is a geometry collection so their feature count is retained
 for the dynamic `partCount` constraint.
+
+The search mirrors `rangeBuilder::getDynamicAlphaHull` line by line: rows
+whose first three points share an exact x or y are reshuffled, exact
+duplicate points are dropped while the Delaunay step reports them, and alpha
+advances until a topologically valid hull is produced. That hull is measured
+for coverage before buffering; later candidates are buffered only when they
+are valid, so coverage stays stale for invalid candidates exactly as in R.
 """
 function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                              buff::Real=10000, initialAlpha::Real=3,
@@ -307,17 +314,17 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     size(points, 1) >= 3 ||
         throw(ArgumentError("at least three unique finite coordinates are required"))
 
+    # R reshuffles the rows while the first three share an exact x or y, then
+    # drops duplicate points until the Delaunay step succeeds.
+    points = _range_shuffle_collinear(points)
+    delaunay = _range_drop_duplicate_points(points)
+
     alpha = Float64(initialAlpha)
     hull = nothing
     accepted_alpha = nothing
     buffered = false
     cap = Float64(alphaCap) + eps(Float64(alphaCap))
     native = _range_native_context()
-    delaunay = try
-        delvor(points)
-    catch
-        nothing
-    end
 
     alpha_polygon(alpha) = isnothing(delaunay) ? nothing : try
         ah2polygon(ahull(delaunay; alpha); crs=4326)
@@ -325,42 +332,71 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
         nothing
     end
 
-    # R evaluates its first valid alpha hull before buffering it. Once that
-    # candidate fails the constraints, every later candidate is buffered in
-    # Equal Earth coordinates before its coverage is measured.
-    candidate = nothing
-    while alpha <= cap && candidate === nothing
+    # R L52-63/L90-93: advance alpha until a hull exists and is topologically
+    # valid. The validity gate runs on the un-buffered candidate, matching
+    # R's `ah2sf` + `st_is_valid` check before the first coverage measurement.
+    hull = alpha_polygon(alpha)
+    while alpha <= cap && (hull === nothing || !_range_polygon_is_valid(hull, native))
         verbose && println("\talpha: ", alpha)
-        candidate = alpha_polygon(alpha)
-        candidate === nothing && (alpha += alphaIncrement)
-    end
-
-    if candidate !== nothing && _range_constraints(points, candidate, fraction, partCount, native)
-        hull = candidate
-        accepted_alpha = alpha
-    end
-
-    while hull === nothing && alpha <= cap
         alpha += alphaIncrement
         alpha > cap && break
-        verbose && println("\talpha: ", alpha)
-        candidate = alpha_polygon(alpha)
-        candidate === nothing && continue
-        candidate = _buffer_range(candidate, buff; force=true, native)
-        if _range_constraints(points, candidate, fraction, partCount, native)
-            hull = candidate
-            accepted_alpha = alpha
-            buffered = true
-        end
+        hull = alpha_polygon(alpha)
     end
 
     if hull === nothing
-        hull = _convex_hull_polygon(points; crs=4326)
+        # R problem=TRUE: the alpha cap was exhausted, fall back to the
+        # buffered convex hull of all points.
+        hull = _buffer_range(_convex_hull_polygon(points; crs=4326), buff; force=true, native)
         accepted_alpha = "MCH"
-        buffered = false
+        buffered = true
+    else
+        # R L97: initial coverage is measured on the un-buffered hull.
+        pointWithin = _range_points_in_polygon(points, hull, native)
+
+        # R L101: main loop while the feature count, coverage fraction, or
+        # validity check fails.
+        while _polygon_count(hull) > partCount ||
+              count(pointWithin) / size(points, 1) < fraction ||
+              !_range_polygon_is_valid(hull, native)
+            alpha += alphaIncrement
+            verbose && println("\talpha: ", alpha)
+            candidate = alpha_polygon(alpha)
+
+            # R L108-113: keep advancing while the candidate fails to build.
+            while alpha <= cap && candidate === nothing
+                alpha += alphaIncrement
+                verbose && println("\talpha: ", alpha)
+                candidate = alpha_polygon(alpha)
+            end
+
+            if candidate !== nothing
+                # R L115-120: buffer only valid candidates; invalid candidates
+                # keep the previous (stale) coverage measurement.
+                if _range_polygon_is_valid(candidate, native)
+                    hull = _buffer_range(candidate, buff; force=true, native)
+                    buffered = true
+                    pointWithin = _range_points_in_polygon(points, hull, native)
+                else
+                    hull = candidate
+                end
+            end
+
+            # R L126-132: alpha past the cap selects the convex hull fallback.
+            if alpha > cap
+                hull = _buffer_range(_convex_hull_polygon(points; crs=4326), buff; force=true, native)
+                accepted_alpha = "MCH"
+                buffered = true
+                break
+            end
+        end
+
+        accepted_alpha = something(accepted_alpha, alpha)
+
+        # R L148-151: buffer the winning hull when it was never buffered.
+        buffered || (hull = _buffer_range(hull, buff; force=true, native))
     end
+
     hull === nothing && throw(ArgumentError("could not construct a polygon from the coordinates"))
-    buffered || (hull = _buffer_range(hull, buff; force=true, native))
     hull = _clip_range(hull, clipToCoast, coastScale)
     alpha_label = accepted_alpha isa String ? accepted_alpha :
                   (isinteger(accepted_alpha) ? string(Int(round(accepted_alpha))) :
