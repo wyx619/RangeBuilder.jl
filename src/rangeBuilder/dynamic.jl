@@ -172,6 +172,34 @@ function _points_in_polygon(points::AbstractMatrix, poly, native=nothing)
     return [_geometry_contains(points[i, 1], points[i, 2], poly) for i in axes(points, 1)]
 end
 
+function _range_points_in_polygon(points::AbstractMatrix, poly, native=nothing)
+    # Coverage predicate matching R sf::st_intersects on planar geometry
+    # (sf_use_s2(FALSE)): a point intersects the polygon when it lies in its
+    # interior or on any of its rings. The ray-casting fallback differs on
+    # hole-boundary points, so the GEOS backend is authoritative.
+    isnothing(poly) && return falses(size(points, 1))
+    components = _polygon_components(poly)
+    isempty(components) && return falses(size(points, 1))
+    transforms = isnothing(native) ? _range_native_context() : native
+    geos = transforms.geos
+    results = falses(size(points, 1))
+    for component in components
+        ctrait = GeoInterface.geomtrait(component)
+        cgeom = GeoInterface.convert(
+            LibGEOS.geointerface_geomtype(ctrait), ctrait, component;
+            context=geos,
+        )
+        for (idx, row) in enumerate(eachrow(points))
+            point_geom = GeoInterface.convert(
+                LibGEOS.Point, GeoInterface.PointTrait(),
+                GeoInterface.Wrappers.Point((row[1], row[2])); context=geos,
+            )
+            results[idx] |= LibGEOS.intersects(point_geom, cgeom, geos)
+        end
+    end
+    return results
+end
+
 function _convex_hull_polygon(points::AbstractMatrix; crs=4326)
     size(points, 1) >= 3 || return nothing
     mesh_points = [Meshes.Point(points[i, 1], points[i, 2]) for i in axes(points, 1)]
@@ -252,7 +280,7 @@ function _clip_range(poly, clipToCoast, scale::Integer)
 end
 
 function _range_constraints(points::AbstractMatrix, poly, fraction::Real, partCount::Integer, native)
-    coverage = count(_points_in_polygon(points, poly, native)) / size(points, 1)
+    coverage = count(_range_points_in_polygon(points, poly, native)) / size(points, 1)
     return _polygon_count(poly) <= partCount && coverage >= fraction
 end
 

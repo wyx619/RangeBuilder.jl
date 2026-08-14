@@ -195,3 +195,11 @@ bowtie = GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (1.0, 1.0), (1.0, 0.0),
                                          (0.0, 1.0), (0.0, 0.0)]]; crs=4326)
 @test !RangeBuilder._range_polygon_is_valid(bowtie)
 @test !RangeBuilder._range_polygon_is_valid(nothing)
+
+# _range_points_in_polygon: GEOS intersects coverage (plan Task 4)
+holey_poly = GeoInterface.Wrappers.Polygon(
+    [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+     [(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0), (3.0, 3.0)]]; crs=4326)
+holey_pts = [3.0 5.0; 5.0 5.0; 5.0 0.0; 15.0 5.0; 0.0 5.0; 3.0 3.0]
+@test RangeBuilder._range_points_in_polygon(holey_pts, holey_poly) == [true, false, true, false, true, true]
+@test RangeBuilder._range_points_in_polygon(holey_pts, nothing) == falses(6)
