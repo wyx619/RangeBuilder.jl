@@ -137,8 +137,8 @@ function _join_arc_components(rows::Vector{Int}, h::AHull;
             current = Tuple{Float64,Float64}[]
         end
     end
-    # R's badLines step: after joining, any line with fewer than four points
-    # (sf::st_cast(line, "POINT") followed by nrow < 4) is removed.  This is
+    # R's badLines step removes any joined line with fewer than four points.
+    # This is
     # what drops three-point degenerate rings that a pure endpoint-id join
     # would otherwise retain.
     filter!(line -> length(line) >= 4, components)

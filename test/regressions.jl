@@ -18,14 +18,23 @@
     @test size(dropped_dv.x, 1) == 3
     @test RangeBuilder._range_drop_duplicate_points([0.0 0.0; 1e-10 1e-10; 2e-10 2e-10]) === nothing
     @test RangeBuilder._range_drop_duplicate_points([0.0 0.0; 1e-13 0.0; 1.0 1.0; 0.0 2.0]) !== nothing
+    float32_collision = [116.0 39.0; 116.0000001 39.0; 117.0 39.0;
+                         116.0 40.0; 117.0 40.0]
+    @test RangeBuilder._shull_float32_duplicate_pair(float32_collision) == (1, 2)
+    shull_dropped = RangeBuilder._range_drop_duplicate_points(float32_collision; backend=:shull)
+    @test shull_dropped !== nothing
+    @test size(shull_dropped.x, 1) == 4
 
     valid_points = [0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.4 0.5]
     valid_poly = ah2polygon(ahull(valid_points; alpha=0.7))
     @test RangeBuilder._range_polygon_is_valid(valid_poly)
+    @test RangeBuilder._range_projected_polygon_is_valid(valid_poly)
     bowtie = GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (1.0, 1.0), (1.0, 0.0),
                                              (0.0, 1.0), (0.0, 0.0)]]; crs=4326)
     @test !RangeBuilder._range_polygon_is_valid(bowtie)
+    @test !RangeBuilder._range_projected_polygon_is_valid(bowtie)
     @test !RangeBuilder._range_polygon_is_valid(nothing)
+    @test !RangeBuilder._range_projected_polygon_is_valid(nothing)
 
     holey_poly = GeoInterface.Wrappers.Polygon(
         [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
@@ -33,6 +42,17 @@
     holey_pts = [3.0 5.0; 5.0 5.0; 5.0 0.0; 15.0 5.0; 0.0 5.0; 3.0 3.0]
     @test RangeBuilder._range_points_in_polygon(holey_pts, holey_poly) == [true, false, true, false, true, true]
     @test RangeBuilder._range_points_in_polygon(holey_pts, nothing) == falses(6)
+
+    overlap_a = GeoInterface.Wrappers.Polygon([[(0.0, 0.0), (2.0, 0.0),
+                                                 (2.0, 1.0), (0.0, 1.0),
+                                                 (0.0, 0.0)]]; crs=4326)
+    overlap_b = GeoInterface.Wrappers.Polygon([[(1.0, 0.0), (3.0, 0.0),
+                                                 (3.0, 1.0), (1.0, 1.0),
+                                                 (1.0, 0.0)]]; crs=4326)
+    overlap = GeoInterface.Wrappers.GeometryCollection([overlap_a, overlap_b]; crs=4326)
+    overlap_pts = [0.5 0.5; 1.5 0.5; 2.5 0.5]
+    @test RangeBuilder._range_points_in_polygon(overlap_pts, overlap) == trues(3)
+    @test RangeBuilder._range_point_intersection_counts(overlap_pts, overlap) == [1, 2, 1]
 
     proj_refs = [(0.0, 0.0, 0.0, 0.0),
                  (90.0, 45.0, 7396237.3744978, 5466867.76021372),

@@ -1,7 +1,7 @@
 const _range_world_cache = Dict{Int,Any}()
 const _range_land_path = normpath(joinpath(@__DIR__, "..", "geodata", "ne_50m_land.jld2"))
-# Match R sf::st_buffer(), whose default nQuadSegs is 30 (sf >= 2.0).
-# The R reference getDynamicAlphaHull calls st_buffer without overriding
+# Match the R reference buffer default: 30 segments per quadrant.
+# `getDynamicAlphaHull` calls its buffer operation without overriding
 # nQuadSegs, so 30 segments per quadrant is the faithful equivalent.
 # This affects only the polygonal approximation of a buffer.
 const _R_BUFFER_QUADRANT_SEGMENTS = 30
@@ -79,15 +79,52 @@ function _closest_point_pair(points::AbstractMatrix)
     return best_i, best_j
 end
 
-function _range_drop_duplicate_points(points::AbstractMatrix)
+function _range_geodesic_closest_point_pair(points::AbstractMatrix)
+    count = size(points, 1)
+    unit_x = Vector{Float64}(undef, count)
+    unit_y = Vector{Float64}(undef, count)
+    unit_z = Vector{Float64}(undef, count)
+    radians = pi / 180
+    @inbounds for index in 1:count
+        longitude = points[index, 1] * radians
+        latitude = points[index, 2] * radians
+        cos_latitude = cos(latitude)
+        unit_x[index] = cos_latitude * cos(longitude)
+        unit_y[index] = cos_latitude * sin(longitude)
+        unit_z[index] = sin(latitude)
+    end
+
+    best_i, best_j, largest_dot = 1, 2, -2.0
+    @inbounds for i in 1:(count - 1)
+        xi, yi, zi = unit_x[i], unit_y[i], unit_z[i]
+        for j in (i + 1):count
+            dot = xi * unit_x[j] + yi * unit_y[j] + zi * unit_z[j]
+            if dot > largest_dot
+                best_i, best_j, largest_dot = i, j, dot
+            end
+        end
+    end
+    return best_i, best_j
+end
+
+function _range_drop_duplicate_points(points::AbstractMatrix; backend::Symbol=:delaunay)
     # Mirrors R rangeBuilder::getDynamicAlphaHull: while the Delaunay step
     # fails with a "duplicate data points" error, drop the closest point pair
     # and retry. Other failures (e.g. collinear input) are not retried here;
     # the caller falls back through its alpha loop exactly as R does.
     current = points
     while size(current, 1) >= 3
+        if backend === :shull && !isnothing(_shull_float32_duplicate_pair(current))
+            # R's rangeBuilder catches interp's "duplicate points" error,
+            # then removes the first member of the geographically closest pair.
+            # Detecting the Float32 collapse before SHull mutates its state
+            # makes that retry deterministic and keeps the core pure.
+            i, _ = _range_geodesic_closest_point_pair(current)
+            current = current[[k for k in axes(current, 1) if k != i], :]
+            continue
+        end
         result = try
-            delvor(current)
+            delvor(current; backend)
         catch e
             e isa ArgumentError && occursin("duplicate data points", sprint(showerror, e)) ?
                 nothing : return nothing
@@ -101,7 +138,7 @@ function _range_drop_duplicate_points(points::AbstractMatrix)
 end
 
 function _range_polygon_is_valid(poly, native=nothing)
-    # Topological validity via the same GEOS backend as R sf::st_is_valid.
+    # Topological validity via the same GEOS backend used by the R reference.
     # Every component must be valid, matching R's `all(st_is_valid(hull))`.
     isnothing(poly) && return false
     components = _polygon_components(poly)
@@ -115,6 +152,42 @@ function _range_polygon_is_valid(poly, native=nothing)
             context=geos,
         )
         LibGEOS.isValid(geom, geos) || return false
+    end
+    return true
+end
+
+function _range_projected_polygon_is_valid(poly, native=nothing)
+    # In the dynamic-search loop, rangeBuilder transforms each newly-built
+    # candidate to Equal Earth before calling st_is_valid() and st_buffer().
+    # A valid buffer can cross the antimeridian after being transformed back
+    # to EPSG:4326; GEOS then sees that geographic representation as a planar
+    # self-intersection even though the projected geometry is valid.  Test the
+    # candidate in the same working CRS as the R implementation.
+    isnothing(poly) && return false
+    components = _polygon_components(poly)
+    isempty(components) && return false
+    transforms = isnothing(native) ? _range_native_context() : native
+    geos = transforms.geos
+    for component in components
+        projected = try
+            GeometryOps.reproject(component, transforms.forward; target_crs="+proj=eqearth")
+        catch
+            return false
+        end
+        trait = GeoInterface.geomtrait(projected)
+        projected_geos = try
+            GeoInterface.convert(
+                LibGEOS.geointerface_geomtype(trait), trait, projected;
+                context=geos,
+            )
+        catch
+            return false
+        end
+        try
+            LibGEOS.isValid(projected_geos, geos) || return false
+        catch
+            return false
+        end
     end
     return true
 end
@@ -175,7 +248,7 @@ function _points_in_polygon(points::AbstractMatrix, poly, native=nothing)
 end
 
 function _range_points_in_polygon(points::AbstractMatrix, poly, native=nothing)
-    # Coverage predicate matching R sf::st_intersects on planar geometry
+    # Coverage predicate matching the R reference's planar intersection test
     # (sf_use_s2(FALSE)): a point intersects the polygon when it lies in its
     # interior or on any of its rings. The ray-casting fallback differs on
     # hole-boundary points, so the GEOS backend is authoritative.
@@ -197,6 +270,34 @@ function _range_points_in_polygon(points::AbstractMatrix, poly, native=nothing)
                 GeoInterface.Wrappers.Point((row[1], row[2])); context=geos,
             )
             results[idx] |= LibGEOS.intersects(point_geom, cgeom, geos)
+        end
+    end
+    return results
+end
+
+function _range_point_intersection_counts(points::AbstractMatrix, poly, native=nothing)
+    # `rangeBuilder` sums the per-point intersection list lengths.
+    # Keep overlapping polygon features separate: a point intersecting two
+    # components contributes two to coverage, rather than being collapsed to
+    # a boolean membership result.
+    isnothing(poly) && return zeros(Int, size(points, 1))
+    components = _polygon_components(poly)
+    isempty(components) && return zeros(Int, size(points, 1))
+    transforms = isnothing(native) ? _range_native_context() : native
+    geos = transforms.geos
+    results = zeros(Int, size(points, 1))
+    for component in components
+        ctrait = GeoInterface.geomtrait(component)
+        cgeom = GeoInterface.convert(
+            LibGEOS.geointerface_geomtype(ctrait), ctrait, component;
+            context=geos,
+        )
+        for (idx, row) in enumerate(eachrow(points))
+            point_geom = GeoInterface.convert(
+                LibGEOS.Point, GeoInterface.PointTrait(),
+                GeoInterface.Wrappers.Point((row[1], row[2])); context=geos,
+            )
+            LibGEOS.intersects(point_geom, cgeom, geos) && (results[idx] += 1)
         end
     end
     return results
@@ -226,12 +327,14 @@ function _polygon_components(poly)
 end
 
 function _buffer_range(poly, distance::Real; force::Bool=false, native=nothing)
-    # A zero-width buffer is the identity operation. In particular, do not
-    # project it: R's `buff=0` path does not change candidate geometry.
-    distance == 0 && return poly
     distance < 0 && throw(ArgumentError("buffer distance must be nonnegative"))
     components = _polygon_components(poly)
     isempty(components) && return poly
+    # Do not short-circuit zero-width buffers. `rangeBuilder` always projects
+    # candidates to Equal Earth and runs its buffer operation, including when
+    # `buff = 0`. GEOS then normalizes the ring and the inverse projection can
+    # move a point exactly on, or just outside, the boundary. That affects the
+    # subsequent `st_intersects()` coverage check and may change alpha/MCH.
     # Each Julia task owns a PROJ context and reuses its transformations.
     # This avoids the Windows libproj global-context crash without serializing
     # candidate buffers.
@@ -282,7 +385,7 @@ function _clip_range(poly, clipToCoast, scale::Integer)
 end
 
 function _range_constraints(points::AbstractMatrix, poly, fraction::Real, partCount::Integer, native)
-    coverage = count(_range_points_in_polygon(points, poly, native)) / size(points, 1)
+    coverage = sum(_range_point_intersection_counts(points, poly, native)) / size(points, 1)
     return _polygon_count(poly) <= partCount && coverage >= fraction
 end
 
@@ -305,7 +408,8 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                              buff::Real=10000, initialAlpha::Real=3,
                              coordHeaders=(1, 2), clipToCoast=:terrestrial,
                              alphaIncrement::Real=1, verbose::Bool=false,
-                             alphaCap::Real=400, coastScale::Integer=50)
+                             alphaCap::Real=400, coastScale::Integer=50,
+                             backend::Symbol=:delaunay)
     0 < fraction <= 1 || throw(ArgumentError("fraction must be in (0, 1]"))
     partCount >= 1 || throw(ArgumentError("partCount must be positive"))
     buff >= 0 || throw(ArgumentError("buff must be nonnegative"))
@@ -319,7 +423,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     # R reshuffles the rows while the first three share an exact x or y, then
     # drops duplicate points until the Delaunay step succeeds.
     points = _range_shuffle_collinear(points)
-    delaunay = _range_drop_duplicate_points(points)
+    delaunay = _range_drop_duplicate_points(points; backend)
 
     alpha = Float64(initialAlpha)
     hull = nothing
@@ -353,13 +457,16 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
         buffered = true
     else
         # R L97: initial coverage is measured on the un-buffered hull.
-        pointWithin = _range_points_in_polygon(points, hull, native)
+        pointWithin = _range_point_intersection_counts(points, hull, native)
+        hull_valid = _range_polygon_is_valid(hull, native)
 
         # R L101: main loop while the feature count, coverage fraction, or
-        # validity check fails.
+        # validity check fails. `hull_valid` records validity in the CRS where
+        # the current hull was produced: geographic before the first buffer,
+        # Equal Earth after a successful candidate buffer.
         while _polygon_count(hull) > partCount ||
-              count(pointWithin) / size(points, 1) < fraction ||
-              !_range_polygon_is_valid(hull, native)
+              sum(pointWithin) / size(points, 1) < fraction ||
+              !hull_valid
             alpha += alphaIncrement
             verbose && println("\talpha: ", alpha)
             candidate = alpha_polygon(alpha)
@@ -372,14 +479,18 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
             end
 
             if candidate !== nothing
-                # R L115-120: buffer only valid candidates; invalid candidates
-                # keep the previous (stale) coverage measurement.
-                if _range_polygon_is_valid(candidate, native)
+                # R L115-120: validate and buffer candidates in Equal Earth.
+                # An inverse-projected buffer may cross the antimeridian, so
+                # its EPSG:4326 coordinate representation is not used for the
+                # next validity gate.
+                if _range_projected_polygon_is_valid(candidate, native)
                     hull = _buffer_range(candidate, buff; force=true, native)
                     buffered = true
-                    pointWithin = _range_points_in_polygon(points, hull, native)
+                    pointWithin = _range_point_intersection_counts(points, hull, native)
+                    hull_valid = true
                 else
                     hull = candidate
+                    hull_valid = false
                 end
             end
 
@@ -388,6 +499,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                 hull = _buffer_range(_convex_hull_polygon(points; crs=4326), buff; force=true, native)
                 accepted_alpha = "MCH"
                 buffered = true
+                hull_valid = true
                 break
             end
         end

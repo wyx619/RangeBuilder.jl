@@ -18,6 +18,14 @@ function _r_hull_indices(x, tri)
     return hull
 end
 
+function _r_hull_indices(x, shull::NamedTuple{(:points, :triads, :hull)})
+    hull = [point.id for point in shull.hull]
+    center_x = sum(@view x[hull, 1]) / length(hull)
+    center_y = sum(@view x[hull, 2]) / length(hull)
+    sort!(hull; by=i -> atan(x[i, 2] - center_y, center_x - x[i, 1]))
+    return hull
+end
+
 """Compute the alpha-shape using the same edge criterion as R `alphahull`."""
 function _ashape(x, y, alpha::Real)
     alpha >= 0 || throw(ArgumentError("alpha must be nonnegative"))

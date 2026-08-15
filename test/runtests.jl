@@ -5,5 +5,6 @@ using Rasters
 import GeoInterface
 
 include("alphahull.jl")
+include("shull_incremental.jl")
 include("rangebuilder.jl")
 include("regressions.jl")

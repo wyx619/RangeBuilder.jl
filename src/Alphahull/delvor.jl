@@ -46,10 +46,22 @@ function _dummycoor(x, i, j, m, away, interior)
                       (m[1] + away * vx, m[2] + away * vy)
 end
 
-"""Construct the Delaunay/Voronoi edge table used by `ashape`."""
+"""Construct the Delaunay/Voronoi edge table used by `ashape`.
+
+`backend=:delaunay` retains the existing high-performance JuliaGeometry
+implementation. `backend=:shull` is an experimental, pure-Julia port of the
+SHull path used by R `interp::tri.mesh()`; it is provided for differential
+validation and does not require R or RCall at runtime.
+"""
 function delvor(x, y=nothing; rng::Random.AbstractRNG=Random.MersenneTwister(0),
-                randomise::Bool=false)
+                randomise::Bool=false, backend::Symbol=:delaunay)
     xy = _points(x, y)
+    if backend === :shull
+        randomise && throw(ArgumentError("the deterministic SHull backend does not support randomise=true"))
+        shull = _shull_final_triads(xy)
+        return DelVor(xy, _shull_mesh(xy, shull), shull)
+    end
+    backend === :delaunay || throw(ArgumentError("backend must be :delaunay or :shull"))
     pts = [(xy[i, 1], xy[i, 2]) for i in axes(xy, 1)]
     # R's interp::tri.mesh builds a deterministic triangulation. Randomised
     # insertion can rotate otherwise identical alpha-hull arc cycles; because

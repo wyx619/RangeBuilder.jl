@@ -9,11 +9,21 @@
         RangeBuilder.DelaunayTriangulation.get_graph(dv.triangulation)
     )
 
+    shull_dv = delvor(pts; backend=:shull)
+    @test size(shull_dv.mesh) == size(dv.mesh)
+    @test all(isfinite, shull_dv.mesh[:, 3:10])
+    @test_throws ArgumentError delvor(pts; backend=:shull, randomise=true)
+    @test_throws ArgumentError delvor(pts; backend=:unknown)
+
     sh = ashape(dv; alpha=0.5)
     @test sh.delvor === dv
     @test sh.alpha == 0.5
     @test size(sh.edges, 2) == 12
     @test sh.length >= 0
+
+    shull_shape = ashape(shull_dv; alpha=0.5)
+    @test shull_shape.delvor === shull_dv
+    @test shull_shape.length >= 0
 
     cp = complement(dv; alpha=0.5)
     @test size(cp, 2) == 19

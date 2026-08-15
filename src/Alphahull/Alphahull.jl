@@ -1,5 +1,6 @@
 # Delaunay/Voronoi and alpha-hull computational kernel.
 include("delaunay_compat.jl")
+include("shull_prototype.jl")
 include("delvor.jl")
 include("ashape.jl")
 include("complement.jl")

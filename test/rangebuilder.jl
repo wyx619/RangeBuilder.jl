@@ -22,8 +22,15 @@
     dynamic = getDynamicAlphaHull(dynamic_points; fraction=0.8, partCount=3, buff=0,
                                   initialAlpha=0.7, alphaIncrement=0.1,
                                   alphaCap=2, clipToCoast=:no)
-    @test dynamic.alpha == "alpha0.8"
+    # The original R implementation still projects and runs GEOS buffer(0),
+    # whose normalized boundary does not retain the required coverage here.
+    @test dynamic.alpha == "alphaMCH"
     @test occursin("Polygon", string(typeof(dynamic.hull)))
+    dynamic_shull = getDynamicAlphaHull(dynamic_points; fraction=0.8, partCount=3, buff=0,
+                                        initialAlpha=0.7, alphaIncrement=0.1,
+                                        alphaCap=2, clipToCoast=:no, backend=:shull)
+    @test dynamic_shull.alpha == dynamic.alpha
+    @test occursin("Polygon", string(typeof(dynamic_shull.hull)))
     dynamic_buffered = getDynamicAlphaHull(dynamic_points; fraction=0.8, partCount=3, buff=1000,
                                            initialAlpha=0.7, alphaIncrement=0.1,
                                            alphaCap=2, clipToCoast=:no)
