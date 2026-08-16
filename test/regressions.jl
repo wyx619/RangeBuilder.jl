@@ -11,6 +11,20 @@
     @test !(shuffled_cols[1, 2] == shuffled_cols[2, 2] == shuffled_cols[3, 2])
     @test RangeBuilder._range_shuffle_collinear([0.0 0.0; 1.0 1.0; 2.0 0.0]) ==
           [0.0 0.0; 1.0 1.0; 2.0 0.0]
+    # R chooses the first row returned by `which(..., arr.ind=TRUE)` on a
+    # symmetric distance matrix, which is the second point of this pair.
+    @test RangeBuilder._closest_point_pair([0.0 0.0; 1.0 0.0; 3.0 0.0]) == (2, 1)
+    @test RangeBuilder._range_geodesic_closest_point_pair(
+        [0.0 0.0; 1.0 0.0; 3.0 0.0],
+    ) == (2, 1)
+    # Dot-product comparisons saturate for sub-metre angular separations and
+    # can retain an earlier, farther pair. Haversine comparison must select
+    # the later, genuinely closer pair, following R's column-major tie rule.
+    submetre_pairs = [0.0 0.0;
+                       1.1e-6 0.0;
+                       114.963105 29.326488;
+                       114.963106 29.326488]
+    @test RangeBuilder._range_geodesic_closest_point_pair(submetre_pairs) == (4, 3)
 
     exact_dup_input = [0.0 0.0; 0.0 0.0; 1.0 1.0; 0.0 2.0]
     dropped_dv = RangeBuilder._range_drop_duplicate_points(exact_dup_input)
@@ -24,6 +38,11 @@
     shull_dropped = RangeBuilder._range_drop_duplicate_points(float32_collision; backend=:shull)
     @test shull_dropped !== nothing
     @test size(shull_dropped.x, 1) == 4
+    shull_prepared = RangeBuilder._range_drop_duplicate_points_with_coordinates(
+        float32_collision; backend=:shull)
+    @test shull_prepared !== nothing
+    @test size(shull_prepared.points, 1) == 4
+    @test shull_prepared.points == shull_prepared.delaunay.x
 
     valid_points = [0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.4 0.5]
     valid_poly = ah2polygon(ahull(valid_points; alpha=0.7))
@@ -87,4 +106,16 @@
 
     @test getDynamicAlphaHull([0.0 0.0; 1.0 1.0; 2.0 2.0]; clipToCoast=:no).alpha == "alphaMCH"
     @test_throws ArgumentError getDynamicAlphaHull([0.0 0.0; 0.0 1.0]; clipToCoast=:no)
+end
+@testset "SHull NaN circumcentre propagation" begin
+    points = [0.0 0.0; 1.0 0.0; 0.0 1.0; 1.0 1.0; 0.4 0.5]
+    reference = delvor(points; backend=:shull)
+    nonfinite_mesh = copy(reference.mesh)
+    nonfinite_mesh[1, 7] = NaN
+    nonfinite = DelVor(reference.x, nonfinite_mesh, reference.triangulation)
+
+    # R's complement() aborts after NA reaches `sum(vert)`.  This must be a
+    # candidate failure, rather than a silently altered Julia alpha hull.
+    @test_throws ArgumentError complement(nonfinite; alpha=0.5)
+    @test RangeBuilder._range_try_ahull(nonfinite, 0.5) === nothing
 end

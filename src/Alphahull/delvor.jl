@@ -53,12 +53,12 @@ implementation. `backend=:shull` is an experimental, pure-Julia port of the
 SHull path used by R `interp::tri.mesh()`; it is provided for differential
 validation and does not require R or RCall at runtime.
 """
-function delvor(x, y=nothing; rng::Random.AbstractRNG=Random.MersenneTwister(0),
+function delvor(x, y=nothing; rng=Random.MersenneTwister(0),
                 randomise::Bool=false, backend::Symbol=:delaunay)
     xy = _points(x, y)
     if backend === :shull
         randomise && throw(ArgumentError("the deterministic SHull backend does not support randomise=true"))
-        shull = _shull_final_triads(xy)
+        shull = _shull_final_triads(xy; rng=rng)
         return DelVor(xy, _shull_mesh(xy, shull), shull)
     end
     backend === :delaunay || throw(ArgumentError("backend must be :delaunay or :shull"))

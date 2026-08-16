@@ -3,6 +3,14 @@ function complement(x, y=nothing; alpha)
     alpha >= 0 || throw(ArgumentError("alpha must be nonnegative"))
     dv = x isa DelVor && y === nothing ? x : delvor(x, y)
     m = dv.mesh
+    # `alphahull::complement()` derives `vert <- mesh[, "mx1"] ==
+    # mesh[, "mx2"]` before constructing any balls.  An NA circumcentre
+    # makes `sum(vert)` NA and R aborts the whole candidate.  SHull exposes
+    # that same C++ state as `NaN`; do not let Julia's boolean comparisons
+    # silently turn it into a usable alpha hull.
+    any(isnan, @view m[:, 7:10]) && throw(ArgumentError(
+        "alpha-hull complement is undefined for a NaN circumcentre",
+    ))
     ne = size(m, 1)
     dm1 = hypot.(m[:,3] .- m[:,7], m[:,4] .- m[:,8])
     dm2 = hypot.(m[:,3] .- m[:,9], m[:,4] .- m[:,10])

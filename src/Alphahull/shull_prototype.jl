@@ -108,8 +108,11 @@ function _shull_r_jitter_amount(values::AbstractVector{<:Real}; factor::Real=0.0
     return Float64(factor) * abs(spacing) / 5
 end
 
+@inline _shull_uniform(rng::Random.AbstractRNG) = rand(rng)
+@inline _shull_uniform(rng::RSeed.AbstractRUniformRNG) = RSeed.r_unif(rng)
+
 function _shull_jittered_points(xy::AbstractMatrix;
-                                rng::Random.AbstractRNG=Random.MersenneTwister(0))
+                                rng=Random.MersenneTwister(0))
     # `interp::tri.mesh()` retries SHull failures with `jitter(x, 0.001)`.
     # As in R, x is perturbed first and y second. The deterministic local RNG
     # keeps the Julia backend reproducible while preserving that amplitude.
@@ -117,7 +120,7 @@ function _shull_jittered_points(xy::AbstractMatrix;
     for column in axes(jittered, 2)
         amount = _shull_r_jitter_amount(view(jittered, :, column))
         @inbounds for row in axes(jittered, 1)
-            jittered[row, column] += amount * (2rand(rng) - 1)
+            jittered[row, column] += amount * (2 * _shull_uniform(rng) - 1)
         end
     end
     return jittered
@@ -309,7 +312,9 @@ function _shull_incremental_triads(xy::AbstractMatrix)
                     break
                 end
             end
-            first_visible >= 0 || throw(ErrorException("SHull found no visible hull facet"))
+            first_visible >= 0 || throw(ErrorException(
+                "SHull found no visible hull facet at insertion $point_index",
+            ))
             if first_invisible < numh
                 for edge in first_visible:first_invisible
                     push!(point_ids, hull[edge + 1].id)
@@ -576,7 +581,7 @@ end
 This experimental function is intentionally separate from `delvor` while the
 R-compatible triad and arc ordering is validated.
 """
-function _shull_final_triads(xy::AbstractMatrix)
+function _shull_final_triads(xy::AbstractMatrix; rng=Random.MersenneTwister(0))
     try
         state = _shull_incremental_triads(xy)
         return _shull_flip_triads!(state)
@@ -584,7 +589,7 @@ function _shull_final_triads(xy::AbstractMatrix)
         _shull_requires_jitter(error) || rethrow()
         # R retries the topology only, then restores its original x/y vectors
         # before exposing tri.mesh. `_shull_mesh` likewise receives `xy`.
-        state = _shull_incremental_triads(_shull_jittered_points(xy))
+        state = _shull_incremental_triads(_shull_jittered_points(xy; rng=rng))
         return _shull_flip_triads!(state)
     end
 end

@@ -76,42 +76,50 @@ function _closest_point_pair(points::AbstractMatrix)
             best_i, best_j, best_d2 = i, j, d2
         end
     end
-    return best_i, best_j
+    # `which(distance == min(distance), arr.ind=TRUE)[1, 1]` in R scans
+    # the symmetric distance matrix by column. For a selected pair `i < j`,
+    # rangeBuilder therefore removes row `j`, not row `i`.
+    return best_j, best_i
 end
 
 function _range_geodesic_closest_point_pair(points::AbstractMatrix)
     count = size(points, 1)
-    unit_x = Vector{Float64}(undef, count)
-    unit_y = Vector{Float64}(undef, count)
-    unit_z = Vector{Float64}(undef, count)
+    longitudes = Vector{Float64}(undef, count)
+    latitudes = Vector{Float64}(undef, count)
+    cosine_latitudes = Vector{Float64}(undef, count)
     radians = pi / 180
     @inbounds for index in 1:count
-        longitude = points[index, 1] * radians
-        latitude = points[index, 2] * radians
-        cos_latitude = cos(latitude)
-        unit_x[index] = cos_latitude * cos(longitude)
-        unit_y[index] = cos_latitude * sin(longitude)
-        unit_z[index] = sin(latitude)
+        longitudes[index] = points[index, 1] * radians
+        latitudes[index] = points[index, 2] * radians
+        cosine_latitudes[index] = cos(latitudes[index])
     end
 
-    best_i, best_j, largest_dot = 1, 2, -2.0
+    best_i, best_j, smallest_haversine = 1, 2, Inf
     @inbounds for i in 1:(count - 1)
-        xi, yi, zi = unit_x[i], unit_y[i], unit_z[i]
         for j in (i + 1):count
-            dot = xi * unit_x[j] + yi * unit_y[j] + zi * unit_z[j]
-            if dot > largest_dot
-                best_i, best_j, largest_dot = i, j, dot
+            half_latitude = (latitudes[j] - latitudes[i]) / 2
+            half_longitude = (longitudes[j] - longitudes[i]) / 2
+            haversine = sin(half_latitude)^2 +
+                        cosine_latitudes[i] * cosine_latitudes[j] * sin(half_longitude)^2
+            if haversine < smallest_haversine
+                best_i, best_j, smallest_haversine = i, j, haversine
             end
         end
     end
-    return best_i, best_j
+    # See `_closest_point_pair`: preserve the row selected by R's
+    # column-major `which(..., arr.ind=TRUE)` on a symmetric distance matrix.
+    return best_j, best_i
 end
 
-function _range_drop_duplicate_points(points::AbstractMatrix; backend::Symbol=:delaunay)
+function _range_drop_duplicate_points_with_coordinates(points::AbstractMatrix;
+                                                       backend::Symbol=:delaunay,
+                                                       rng=Random.MersenneTwister(0))
     # Mirrors R rangeBuilder::getDynamicAlphaHull: while the Delaunay step
     # fails with a "duplicate data points" error, drop the closest point pair
     # and retry. Other failures (e.g. collinear input) are not retried here;
-    # the caller falls back through its alpha loop exactly as R does.
+    # the caller falls back through its alpha loop exactly as R does. Return
+    # the retained coordinates as well: R uses this reduced set for every
+    # later coverage check and for the convex-hull fallback.
     current = points
     while size(current, 1) >= 3
         if backend === :shull && !isnothing(_shull_float32_duplicate_pair(current))
@@ -124,17 +132,50 @@ function _range_drop_duplicate_points(points::AbstractMatrix; backend::Symbol=:d
             continue
         end
         result = try
-            delvor(current; backend)
+            delvor(current; backend=backend, rng=rng)
         catch e
             e isa ArgumentError && occursin("duplicate data points", sprint(showerror, e)) ?
                 nothing : return nothing
         end
-        result !== nothing && return result
+        result !== nothing && return (points=current, delaunay=result)
         i, j = _closest_point_pair(current)
         keep = [k for k in axes(current, 1) if k != i]
         current = current[keep, :]
     end
     return nothing
+end
+
+function _range_drop_duplicate_points(points::AbstractMatrix;
+                                      backend::Symbol=:delaunay,
+                                      rng=Random.MersenneTwister(0))
+    prepared = _range_drop_duplicate_points_with_coordinates(points; backend=backend, rng=rng)
+    return isnothing(prepared) ? nothing : prepared.delaunay
+end
+
+function _range_drop_shull_float32_duplicates(points::AbstractMatrix)
+    current = points
+    while size(current, 1) >= 3
+        isnothing(_shull_float32_duplicate_pair(current)) && return current
+        drop_index, _ = _range_geodesic_closest_point_pair(current)
+        current = current[[index for index in axes(current, 1) if index != drop_index], :]
+    end
+    return current
+end
+
+function _range_try_ahull(points::AbstractMatrix, alpha::Real, backend::Symbol, rng)
+    return try
+        ahull(delvor(points; backend=backend, rng=rng); alpha)
+    catch
+        nothing
+    end
+end
+
+function _range_try_ahull(delaunay::DelVor, alpha::Real)
+    return try
+        ahull(delaunay; alpha)
+    catch
+        nothing
+    end
 end
 
 function _range_polygon_is_valid(poly, native=nothing)
@@ -403,13 +444,23 @@ duplicate points are dropped while the Delaunay step reports them, and alpha
 advances until a topologically valid hull is produced. That hull is measured
 for coverage before buffering; later candidates are buffered only when they
 are valid, so coverage stays stale for invalid candidates exactly as in R.
+
+For `backend=:shull`, `rng` is forwarded to SHull's retry-only `jitter()`
+path. Passing `RSeed.r_rng(r_random_seed)` reproduces that R uniform stream
+when the caller has captured the matching `.Random.seed`; this accepts both
+R's default Mersenne-Twister state and the L'Ecuyer-CMRG state used by
+`future`/`furrr` workers. In
+that mode, failed topology retries also advance alpha as R does, while Julia
+rebuilds each candidate exactly as R does. The default JuliaGeometry backend
+retains its cached-triangulation performance path.
 """
 function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                              buff::Real=10000, initialAlpha::Real=3,
                              coordHeaders=(1, 2), clipToCoast=:terrestrial,
                              alphaIncrement::Real=1, verbose::Bool=false,
                              alphaCap::Real=400, coastScale::Integer=50,
-                             backend::Symbol=:delaunay)
+                             backend::Symbol=:delaunay,
+                             rng=Random.MersenneTwister(0))
     0 < fraction <= 1 || throw(ArgumentError("fraction must be in (0, 1]"))
     partCount >= 1 || throw(ArgumentError("partCount must be positive"))
     buff >= 0 || throw(ArgumentError("buff must be nonnegative"))
@@ -420,28 +471,55 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     size(points, 1) >= 3 ||
         throw(ArgumentError("at least three unique finite coordinates are required"))
 
+    alpha = Float64(initialAlpha)
+    cap = Float64(alphaCap) + eps(Float64(alphaCap))
+
     # R reshuffles the rows while the first three share an exact x or y, then
     # drops duplicate points until the Delaunay step succeeds.
     points = _range_shuffle_collinear(points)
-    delaunay = _range_drop_duplicate_points(points; backend)
+    r_compatible_shull = backend === :shull && rng isa RSeed.AbstractRUniformRNG
+    initial_alpha_hull = nothing
+    if r_compatible_shull
+        # `rangeBuilder` calls `ahull()` once to finish duplicate removal, then
+        # calls it again before the alpha loop. Every following candidate also
+        # rebuilds SHull and can consume a different jitter stream.
+        points = _range_drop_shull_float32_duplicates(points)
+        size(points, 1) >= 3 || throw(ArgumentError("at least three points remain after SHull duplicate removal"))
+        _range_try_ahull(points, alpha, backend, rng)
+        initial_alpha_hull = _range_try_ahull(points, alpha, backend, rng)
+        while alpha <= cap && isnothing(initial_alpha_hull)
+            alpha += alphaIncrement
+            initial_alpha_hull = _range_try_ahull(points, alpha, backend, rng)
+        end
+        delaunay = nothing
+    else
+        prepared = _range_drop_duplicate_points_with_coordinates(points; backend=backend, rng=rng)
+        if !isnothing(prepared)
+            points = prepared.points
+            delaunay = prepared.delaunay
+        else
+            delaunay = nothing
+        end
+    end
 
-    alpha = Float64(initialAlpha)
     hull = nothing
     accepted_alpha = nothing
     buffered = false
-    cap = Float64(alphaCap) + eps(Float64(alphaCap))
     native = _range_native_context()
 
-    alpha_polygon(alpha) = isnothing(delaunay) ? nothing : try
-        ah2polygon(ahull(delaunay; alpha); crs=4326)
+    polygon_from_hull(alpha_hull) = isnothing(alpha_hull) ? nothing : try
+        ah2polygon(alpha_hull; crs=4326)
     catch
         nothing
     end
+    alpha_polygon(alpha) = r_compatible_shull ?
+        polygon_from_hull(_range_try_ahull(points, alpha, backend, rng)) :
+        (isnothing(delaunay) ? nothing : polygon_from_hull(_range_try_ahull(delaunay, alpha)))
 
     # R L52-63/L90-93: advance alpha until a hull exists and is topologically
     # valid. The validity gate runs on the un-buffered candidate, matching
     # R's `ah2sf` + `st_is_valid` check before the first coverage measurement.
-    hull = alpha_polygon(alpha)
+    hull = r_compatible_shull ? polygon_from_hull(initial_alpha_hull) : alpha_polygon(alpha)
     while alpha <= cap && (hull === nothing || !_range_polygon_is_valid(hull, native))
         verbose && println("\talpha: ", alpha)
         alpha += alphaIncrement
