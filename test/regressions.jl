@@ -141,6 +141,27 @@ end
     # candidate failure, rather than a silently altered Julia alpha hull.
     @test_throws ArgumentError complement(nonfinite; alpha=0.5)
     @test RangeBuilder._range_try_ahull(nonfinite, 0.5) === nothing
+
+    # `tri.mesh()` restores original coordinates after a jitter retry. When a
+    # triad is therefore exactly collinear in its public coordinates, C++
+    # retains the orientation from its Float32 working points. That direction
+    # decides whether `interp::circum()` propagates NaN.
+    collinear = [0.0 0.0; 1.0 0.0; 2.0 0.0]
+    triad = RangeBuilder._SHullTriad(1, 2, 3)
+    negative_orientation = [
+        RangeBuilder._SHullPoint(1, 0f0, 0f0),
+        RangeBuilder._SHullPoint(2, 1f0, 0f0),
+        RangeBuilder._SHullPoint(3, 2f0, 1f-3),
+    ]
+    positive_orientation = [
+        RangeBuilder._SHullPoint(1, 0f0, 0f0),
+        RangeBuilder._SHullPoint(2, 1f0, 0f0),
+        RangeBuilder._SHullPoint(3, 2f0, -1f-3),
+    ]
+    negative_state = (; points=negative_orientation, triads=[triad], hull=copy(negative_orientation))
+    positive_state = (; points=positive_orientation, triads=[triad], hull=copy(positive_orientation))
+    @test RangeBuilder._shull_trlist(collinear, negative_state)[1, 1:3] == [1, 2, 3]
+    @test RangeBuilder._shull_trlist(collinear, positive_state)[1, 1:3] == [1, 3, 2]
 end
 
 @testset "Spherical MCH convex hull" begin
