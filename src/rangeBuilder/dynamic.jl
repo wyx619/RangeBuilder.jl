@@ -565,15 +565,22 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     # R L52-63/L90-93: advance alpha until a hull exists and is topologically
     # valid. The validity gate runs on the un-buffered candidate, matching
     # R's `ah2sf` + `st_is_valid` check before the first coverage measurement.
+    problem = false
     hull = shull_rebuild ? polygon_from_hull(initial_alpha_hull) : alpha_polygon(alpha)
     while alpha <= cap && (hull === nothing || !_range_polygon_is_valid(hull, native))
         verbose && println("\talpha: ", alpha)
         alpha += alphaIncrement
-        alpha > cap && break
+        if alpha > cap
+            # R L143-150 marks the search as failed as soon as the topology
+            # repair loop exceeds `alphaCap`; it does not retain the last
+            # invalid candidate for the later coverage loop.
+            problem = true
+            break
+        end
         hull = alpha_polygon(alpha)
     end
 
-    if hull === nothing
+    if problem || hull === nothing
         # R problem=TRUE: the alpha cap was exhausted, fall back to the
         # buffered convex hull of all points.
         hull = _buffer_range(_mch_convex_hull_polygon(points; crs=4326), buff; force=true, native)
@@ -612,7 +619,11 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                     buffered = true
                     pointWithin = _range_point_intersection_counts(
                         points, hull, native; use_spherical=!iszero(buff))
-                    hull_valid = true
+                    # R L161 evaluates `st_is_valid()` again after the
+                    # inverse Equal Earth -> WGS84 transform. This is not
+                    # implied by validity in the projected CRS: spherical
+                    # great-circle edges can self-cross after inversion.
+                    hull_valid = _range_polygon_is_valid(hull, native)
                 else
                     hull = candidate
                     hull_valid = false
