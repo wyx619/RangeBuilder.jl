@@ -161,6 +161,11 @@ end
     flipped_state = (; points=jittered_points, triads=[triad], hull=copy(jittered_points),
                      orientation_xy=flipped_xy)
     @test RangeBuilder._shull_trlist(collinear, flipped_state)[1, 1:3] == [1, 3, 2]
+
+    # R's unique(sort(round(...))) merges signed zero. Julia's unique! uses
+    # isequal, so this must be normalised before deriving jitter amplitude.
+    signed_zero_values = [-120.0, -0.04, 0.04, 0.1, 124.5]
+    @test RangeBuilder._shull_r_jitter_amount(signed_zero_values) == 2e-5
 end
 
 @testset "Spherical MCH convex hull" begin

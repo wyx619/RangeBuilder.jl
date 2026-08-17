@@ -102,7 +102,13 @@ function _shull_r_jitter_amount(values::AbstractVector{<:Real}; factor::Real=0.0
     span == 0 && (span = abs(lower))
     span == 0 && (span = 1.0)
     digits = 3 - floor(Int, log10(span))
-    rounded = sort!(unique!(round.(finite_values; digits)))
+    rounded = round.(finite_values; digits)
+    # R's unique() treats -0 and +0 as equal, whereas Julia's unique! uses
+    # isequal and retains both. Normalise zero before R-style sort/dedup.
+    @inbounds for index in eachindex(rounded)
+        rounded[index] == 0.0 && (rounded[index] = 0.0)
+    end
+    rounded = unique!(sort!(rounded))
     spacing = length(rounded) > 1 ? minimum(diff(rounded)) :
               (rounded[1] != 0 ? rounded[1] / 10 : span / 10)
     return Float64(factor) * abs(spacing) / 5
