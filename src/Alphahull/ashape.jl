@@ -18,7 +18,7 @@ function _r_hull_indices(x, tri)
     return hull
 end
 
-function _r_hull_indices(x, shull::NamedTuple{(:points, :triads, :hull)})
+function _r_hull_indices(x, shull::NamedTuple)
     hull = [point.id for point in shull.hull]
     center_x = sum(@view x[hull, 1]) / length(hull)
     center_y = sum(@view x[hull, 2]) / length(hull)

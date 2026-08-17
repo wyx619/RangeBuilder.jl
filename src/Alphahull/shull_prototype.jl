@@ -588,39 +588,33 @@ function _shull_final_triads(xy::AbstractMatrix; rng=Random.MersenneTwister(0))
     catch error
         _shull_requires_jitter(error) || rethrow()
         # R retries the topology only, then restores its original x/y vectors
-        # before exposing tri.mesh. `_shull_mesh` likewise receives `xy`.
-        state = _shull_incremental_triads(_shull_jittered_points(xy; rng=rng))
-        return _shull_flip_triads!(state)
+        # before exposing tri.mesh. Its C++ trlist is nevertheless oriented
+        # against these Float64 jitter coordinates, so retain them separately.
+        jittered_xy = _shull_jittered_points(xy; rng=rng)
+        state = _shull_incremental_triads(jittered_xy)
+        return (; _shull_flip_triads!(state)..., orientation_xy=jittered_xy)
     end
 end
 
 """Build R-compatible `interp::tri.mesh()\$trlist` rows from final SHull triads.
 
-Julia's internal triads require the established nonzero-orientation conversion
-to match the C++ output. A zero determinant is distinct: after a jitter retry
-`tri.mesh()` restores the original coordinates but retains the jitter-derived
-triad direction. Use the Float32 working direction in that case, so a
-now-collinear triple retains precisely the C++ ordering and propagates its
-NaN circumcentre through `alphahull::complement()`. Arc indices are assigned
-in the same first-seen order as `shullDeltri.cpp`.
+Julia's internal triads require the established orientation conversion to
+match the C++ output. After a jitter retry, `tri.mesh()` restores public x/y
+but C++ has already oriented `trlist` with its Float64 jitter input. The
+working SHull points are Float32 and cannot reproduce this distinction, so
+the retained `orientation_xy` is used only for this export step. Arc indices
+are assigned in the same first-seen order as `shullDeltri.cpp`.
 """
 function _shull_trlist(xy::AbstractMatrix, state=_shull_final_triads(xy))
     size(xy, 2) == 2 || throw(ArgumentError("xy must have two columns"))
     rows = Matrix{Int}(undef, length(state.triads), 9)
-    points_by_id = Vector{_SHullPoint}(undef, length(state.points))
-    for point in state.points
-        points_by_id[point.id] = point
-    end
+    orientation_xy = hasproperty(state, :orientation_xy) ? state.orientation_xy : xy
     for (row, triad) in enumerate(state.triads)
-        orientation = (xy[triad.c, 1] - xy[triad.b, 1]) *
-                      (xy[triad.b, 2] - xy[triad.a, 2]) +
-                      (xy[triad.c, 2] - xy[triad.b, 2]) *
-                      (xy[triad.a, 1] - xy[triad.b, 1])
-        if iszero(orientation)
-            a, b, c = points_by_id[triad.a], points_by_id[triad.b], points_by_id[triad.c]
-            orientation = (c.r - b.r) * (b.c - a.c) + (c.c - b.c) * (a.r - b.r)
-        end
-        if orientation <= 0
+        orientation = (orientation_xy[triad.c, 1] - orientation_xy[triad.b, 1]) *
+                      (orientation_xy[triad.b, 2] - orientation_xy[triad.a, 2]) +
+                      (orientation_xy[triad.c, 2] - orientation_xy[triad.b, 2]) *
+                      (orientation_xy[triad.a, 1] - orientation_xy[triad.b, 1])
+        if orientation < 0
             rows[row, 1:6] .= (triad.a, triad.b, triad.c, triad.bc, triad.ac, triad.ab)
         else
             rows[row, 1:6] .= (triad.a, triad.c, triad.b, triad.bc, triad.ab, triad.ac)
