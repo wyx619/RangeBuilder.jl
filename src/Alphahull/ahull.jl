@@ -168,6 +168,13 @@ function _cut_and_order!(arcs, ends, points)
                         if ad.order == _ORDER_3142
                             case = abs((ad.angle1 - ad.angle3) / 2) < 1e-5 ? 2 : 1
                         end
+                        # R alphahull leaves `case` unbound for every other
+                        # endpoint-order configuration, then reads it below.
+                        # That makes the whole candidate fail; returning an
+                        # ordinary arc here would accept alphas R skips.
+                        case == 0 && throw(ArgumentError(
+                            "alpha-hull arc cut has an undefined R case",
+                        ))
                         if case == 2
                             middle = (ad.angle2 - ad.angle4) / 2
                             nvx, nvy = _rotate(1.0, 0.0, -aw[6] + middle - ad.angox)
@@ -185,6 +192,12 @@ function _cut_and_order!(arcs, ends, points)
                         if ad.order == _ORDER_1324_ALT
                             case = abs((ad.angle2 - ad.angle4) / 2) < 1e-5 ? 2 : 1
                         end
+                        # See the preceding shared-endpoint branch. This is
+                        # an intentional compatibility failure, not a new
+                        # geometry classification.
+                        case == 0 && throw(ArgumentError(
+                            "alpha-hull arc cut has an undefined R case",
+                        ))
                         if case == 2
                             middle = (ad.angle3 - ad.angle1) / 2
                             nvx, nvy = _rotate(1.0, 0.0, aw[6] - middle - ad.angox)
