@@ -73,6 +73,13 @@
     @test RangeBuilder._range_points_in_polygon(overlap_pts, overlap) == trues(3)
     @test RangeBuilder._range_point_intersection_counts(overlap_pts, overlap) == [1, 2, 1]
 
+    # rangeBuilder uses sf with S2 enabled for WGS84 point coverage.  The
+    # great-circle edge between (120, 0) and (0, 60) contains this point on
+    # the sphere, while the longitude/latitude planar triangle does not.
+    spherical_poly = GeoInterface.Wrappers.Polygon(
+        [[(0.0, 0.0), (120.0, 0.0), (0.0, 60.0), (0.0, 0.0)]]; crs=4326)
+    @test RangeBuilder._range_point_intersection_counts([60.0 45.0], spherical_poly) == [1]
+
     proj_refs = [(0.0, 0.0, 0.0, 0.0),
                  (90.0, 45.0, 7396237.3744978, 5466867.76021372),
                  (-120.0, -30.0, -10758407.9263306, -3764325.42689213),
@@ -118,4 +125,14 @@ end
     # candidate failure, rather than a silently altered Julia alpha hull.
     @test_throws ArgumentError complement(nonfinite; alpha=0.5)
     @test RangeBuilder._range_try_ahull(nonfinite, 0.5) === nothing
+end
+
+@testset "Spherical MCH convex hull" begin
+    points = [0.0 0.0; 90.0 0.0; 0.0 60.0; 20.0 15.0]
+    indices = RangeBuilder._spherical_convex_hull_indices(points)
+    @test Set(indices) == Set((1, 2, 3))
+    polygon = RangeBuilder._spherical_convex_hull_polygon(points)
+    ring = GeoInterface.getpoint(GeoInterface.getexterior(polygon))
+    @test length(ring) == 4
+    @test ring[1] == ring[end]
 end

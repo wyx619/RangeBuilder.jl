@@ -316,29 +316,45 @@ function _range_points_in_polygon(points::AbstractMatrix, poly, native=nothing)
     return results
 end
 
-function _range_point_intersection_counts(points::AbstractMatrix, poly, native=nothing)
-    # `rangeBuilder` sums the per-point intersection list lengths.
-    # Keep overlapping polygon features separate: a point intersecting two
-    # components contributes two to coverage, rather than being collapsed to
-    # a boolean membership result.
+function _range_point_intersection_counts(points::AbstractMatrix, poly, native=nothing;
+                                          use_spherical::Bool=true)
+    # `rangeBuilder` calls sf::st_intersects() on geographic coordinates with
+    # S2 enabled. Keep overlapping components separate, because R sums the
+    # per-point intersection-list lengths rather than boolean membership.
     isnothing(poly) && return zeros(Int, size(points, 1))
     components = _polygon_components(poly)
     isempty(components) && return zeros(Int, size(points, 1))
-    transforms = isnothing(native) ? _range_native_context() : native
-    geos = transforms.geos
+    if !use_spherical
+        transforms = isnothing(native) ? _range_native_context() : native
+        geos = transforms.geos
+        results = zeros(Int, size(points, 1))
+        for component in components
+            trait = GeoInterface.geomtrait(component)
+            polygon = GeoInterface.convert(
+                LibGEOS.geointerface_geomtype(trait), trait, component;
+                context=geos,
+            )
+            for (idx, row) in enumerate(eachrow(points))
+                point = GeoInterface.convert(
+                    LibGEOS.Point, GeoInterface.PointTrait(),
+                    GeoInterface.Wrappers.Point((row[1], row[2])); context=geos,
+                )
+                LibGEOS.intersects(point, polygon, geos) && (results[idx] += 1)
+            end
+        end
+        return results
+    end
+    spherical = GeometryOps.RelateNG(; manifold=GeometryOps.Spherical())
+    predicate = GeometryOps.pred_intersects()
     results = zeros(Int, size(points, 1))
     for component in components
-        ctrait = GeoInterface.geomtrait(component)
-        cgeom = GeoInterface.convert(
-            LibGEOS.geointerface_geomtype(ctrait), ctrait, component;
-            context=geos,
-        )
+        # `rangeBuilder` validates candidates in its Equal Earth working CRS.
+        # Do not add a separate spherical self-crossing gate before the S2-like
+        # coverage query, because great-circle edges can cross after inversion.
+        prepared = GeometryOps.prepare(spherical, component; validate=false)
         for (idx, row) in enumerate(eachrow(points))
-            point_geom = GeoInterface.convert(
-                LibGEOS.Point, GeoInterface.PointTrait(),
-                GeoInterface.Wrappers.Point((row[1], row[2])); context=geos,
-            )
-            LibGEOS.intersects(point_geom, cgeom, geos) && (results[idx] += 1)
+            point = GeoInterface.Wrappers.Point((row[1], row[2]); crs=4326)
+            GeometryOps.relate_predicate(prepared, predicate, point) && (results[idx] += 1)
         end
     end
     return results
@@ -353,6 +369,15 @@ function _convex_hull_polygon(points::AbstractMatrix; crs=4326)
     isempty(ring) && return nothing
     first(ring) == last(ring) || push!(ring, first(ring))
     return GeoInterface.Wrappers.Polygon([ring]; crs)
+end
+
+function _mch_convex_hull_polygon(points::AbstractMatrix; crs=4326)
+    return try
+        _spherical_convex_hull_polygon(points; crs)
+    catch error
+        error isa ArgumentError || rethrow()
+        _convex_hull_polygon(points; crs)
+    end
 end
 
 function _polygon_components(poly)
@@ -530,7 +555,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     if hull === nothing
         # R problem=TRUE: the alpha cap was exhausted, fall back to the
         # buffered convex hull of all points.
-        hull = _buffer_range(_convex_hull_polygon(points; crs=4326), buff; force=true, native)
+        hull = _buffer_range(_mch_convex_hull_polygon(points; crs=4326), buff; force=true, native)
         accepted_alpha = "MCH"
         buffered = true
     else
@@ -564,7 +589,8 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                 if _range_projected_polygon_is_valid(candidate, native)
                     hull = _buffer_range(candidate, buff; force=true, native)
                     buffered = true
-                    pointWithin = _range_point_intersection_counts(points, hull, native)
+                    pointWithin = _range_point_intersection_counts(
+                        points, hull, native; use_spherical=!iszero(buff))
                     hull_valid = true
                 else
                     hull = candidate
@@ -574,7 +600,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
 
             # R L126-132: alpha past the cap selects the convex hull fallback.
             if alpha > cap
-                hull = _buffer_range(_convex_hull_polygon(points; crs=4326), buff; force=true, native)
+                hull = _buffer_range(_mch_convex_hull_polygon(points; crs=4326), buff; force=true, native)
                 accepted_alpha = "MCH"
                 buffered = true
                 hull_valid = true
