@@ -1,9 +1,10 @@
 [deps]
+GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
+GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 RCall = "6f49c342-dc21-5d91-9882-a32aef131414"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 RangeBuilder = "6f1f03ec-aa9c-4bed-a5d6-4426c7e0f3ce"
 Rasters = "a3a2b9e3-a471-40c9-b274-f788e487c689"
-GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]

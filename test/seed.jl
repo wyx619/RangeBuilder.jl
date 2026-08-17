@@ -18,6 +18,12 @@
           [10.0 + 0.5 * (2 * expected[1] - 1),
            20.0 + 0.5 * (2 * expected[2] - 1)]
 
+    # R 4.6's default `sample.kind = "Rejection"` consumes 16-bit chunks
+    # from the same uniform stream.  The no-replacement branch supplies the
+    # row reshuffle used by `getDynamicAlphaHull()` for collinear leading rows.
+    @test RangeBuilder.RSeed.r_sample_permutation(RangeBuilder.RSeed.RMersenneTwister(1), 4) ==
+          [1, 3, 4, 2]
+
     source = RangeBuilder.RSeed.RMersenneTwister(123)
     RangeBuilder.RSeed.r_runif(source, 17)
     r_state = Vector{Int32}(undef, 626)

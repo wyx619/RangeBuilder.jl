@@ -24,6 +24,9 @@
     shull_shape = ashape(shull_dv; alpha=0.5)
     @test shull_shape.delvor === shull_dv
     @test shull_shape.length >= 0
+    @test RangeBuilder._shull_boundary_chain(
+        [1 2 3 0 0 0],
+    ) == [2, 3, 1]
 
     cp = complement(dv; alpha=0.5)
     @test size(cp, 2) == 19

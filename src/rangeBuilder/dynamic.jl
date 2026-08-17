@@ -58,7 +58,10 @@ function _range_shuffle_collinear(points::AbstractMatrix; rng=Random.MersenneTwi
         first_three = points[1:3, :]
         if first_three[1, 1] == first_three[2, 1] == first_three[3, 1] ||
            first_three[1, 2] == first_three[2, 2] == first_three[3, 2]
-            points = points[Random.randperm(rng, size(points, 1)), :]
+            permutation = rng isa RSeed.AbstractRUniformRNG ?
+                          RSeed.r_sample_permutation(rng, size(points, 1)) :
+                          Random.randperm(rng, size(points, 1))
+            points = points[permutation, :]
         else
             return points
         end
@@ -179,13 +182,18 @@ function _range_try_ahull(delaunay::DelVor, alpha::Real)
 end
 
 function _range_polygon_is_valid(poly, native=nothing)
-    # Topological validity via the same GEOS backend used by the R reference.
-    # Every component must be valid, matching R's `all(st_is_valid(hull))`.
+    # `rangeBuilder` calls `sf::st_is_valid()` while the candidate still has
+    # EPSG:4326 coordinates.  With sf's default S2 mode this rejects rings
+    # whose ordinary lon/lat line segments are GEOS-valid but whose minor
+    # great-circle arcs self-cross.  GeometryOps' spherical RelateNG prepare
+    # performs precisely that self-crossing check.  R validates each feature,
+    # so retain the component-wise loop here as well.
     isnothing(poly) && return false
     components = _polygon_components(poly)
     isempty(components) && return false
     transforms = isnothing(native) ? _range_native_context() : native
     geos = transforms.geos
+    spherical = GeometryOps.RelateNG(; manifold=GeometryOps.Spherical())
     for component in components
         trait = GeoInterface.geomtrait(component)
         geom = GeoInterface.convert(
@@ -193,6 +201,12 @@ function _range_polygon_is_valid(poly, native=nothing)
             context=geos,
         )
         LibGEOS.isValid(geom, geos) || return false
+        try
+            GeometryOps.prepare(spherical, component)
+        catch error
+            error isa ArgumentError || rethrow()
+            return false
+        end
     end
     return true
 end
@@ -345,7 +359,6 @@ function _range_point_intersection_counts(points::AbstractMatrix, poly, native=n
         return results
     end
     spherical = GeometryOps.RelateNG(; manifold=GeometryOps.Spherical())
-    predicate = GeometryOps.pred_intersects()
     results = zeros(Int, size(points, 1))
     for component in components
         # `rangeBuilder` validates candidates in its Equal Earth working CRS.
@@ -354,7 +367,14 @@ function _range_point_intersection_counts(points::AbstractMatrix, poly, native=n
         prepared = GeometryOps.prepare(spherical, component; validate=false)
         for (idx, row) in enumerate(eachrow(points))
             point = GeoInterface.Wrappers.Point((row[1], row[2]); crs=4326)
-            GeometryOps.relate_predicate(prepared, predicate, point) && (results[idx] += 1)
+            # `TopologyPredicate` is a mutable accumulator.  Unlike R's
+            # independent `st_intersects()` matrix cells, reusing it carries a
+            # prior hit into later point/component queries.
+            GeometryOps.relate_predicate(
+                prepared,
+                GeometryOps.pred_intersects(),
+                point,
+            ) && (results[idx] += 1)
         end
     end
     return results
@@ -470,14 +490,13 @@ advances until a topologically valid hull is produced. That hull is measured
 for coverage before buffering; later candidates are buffered only when they
 are valid, so coverage stays stale for invalid candidates exactly as in R.
 
-For `backend=:shull`, `rng` is forwarded to SHull's retry-only `jitter()`
-path. Passing `RSeed.r_rng(r_random_seed)` reproduces that R uniform stream
-when the caller has captured the matching `.Random.seed`; this accepts both
-R's default Mersenne-Twister state and the L'Ecuyer-CMRG state used by
-`future`/`furrr` workers. In
-that mode, failed topology retries also advance alpha as R does, while Julia
-rebuilds each candidate exactly as R does. The default JuliaGeometry backend
-retains its cached-triangulation performance path.
+For `backend=:shull`, every alpha candidate rebuilds SHull, matching the
+original `rangeBuilder::getDynamicAlphaHull()` call sequence. `rng` is
+forwarded to SHull's retry-only `jitter()` path. Passing
+`RSeed.r_rng(r_random_seed)` reproduces the matching R uniform stream; this
+accepts both R's default Mersenne-Twister state and the L'Ecuyer-CMRG state
+used by `future`/`furrr` workers. The default JuliaGeometry backend retains
+its cached-triangulation performance path.
 """
 function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                              buff::Real=10000, initialAlpha::Real=3,
@@ -501,13 +520,15 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
 
     # R reshuffles the rows while the first three share an exact x or y, then
     # drops duplicate points until the Delaunay step succeeds.
-    points = _range_shuffle_collinear(points)
-    r_compatible_shull = backend === :shull && rng isa RSeed.AbstractRUniformRNG
+    points = _range_shuffle_collinear(points; rng)
+    shull_rebuild = backend === :shull
     initial_alpha_hull = nothing
-    if r_compatible_shull
+    if shull_rebuild
         # `rangeBuilder` calls `ahull()` once to finish duplicate removal, then
         # calls it again before the alpha loop. Every following candidate also
-        # rebuilds SHull and can consume a different jitter stream.
+        # rebuilds SHull and can consume a different jitter stream. A supplied
+        # `RSeed` makes that stream identical to R; other Julia RNGs retain
+        # the same call sequence without claiming bitwise R randomness.
         points = _range_drop_shull_float32_duplicates(points)
         size(points, 1) >= 3 || throw(ArgumentError("at least three points remain after SHull duplicate removal"))
         _range_try_ahull(points, alpha, backend, rng)
@@ -537,14 +558,14 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     catch
         nothing
     end
-    alpha_polygon(alpha) = r_compatible_shull ?
+    alpha_polygon(alpha) = shull_rebuild ?
         polygon_from_hull(_range_try_ahull(points, alpha, backend, rng)) :
         (isnothing(delaunay) ? nothing : polygon_from_hull(_range_try_ahull(delaunay, alpha)))
 
     # R L52-63/L90-93: advance alpha until a hull exists and is topologically
     # valid. The validity gate runs on the un-buffered candidate, matching
     # R's `ah2sf` + `st_is_valid` check before the first coverage measurement.
-    hull = r_compatible_shull ? polygon_from_hull(initial_alpha_hull) : alpha_polygon(alpha)
+    hull = shull_rebuild ? polygon_from_hull(initial_alpha_hull) : alpha_polygon(alpha)
     while alpha <= cap && (hull === nothing || !_range_polygon_is_valid(hull, native))
         verbose && println("\talpha: ", alpha)
         alpha += alphaIncrement

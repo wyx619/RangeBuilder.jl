@@ -2,12 +2,12 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "c02fa8e79e00815c845fb7920a1cc89a4aa2c765"
+project_hash = "65ad45816df31db75298d162cc38b07932843407"
 
 [[deps.ADTypes]]
-git-tree-sha1 = "9b38b82a9fe131f3d331a53b7203d9d1a2a4602c"
+git-tree-sha1 = "5970c86505ae9c07bf5bc521ef2bbbb3849e8b7b"
 uuid = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
-version = "1.22.4"
+version = "1.23.0"
 
     [deps.ADTypes.extensions]
     ADTypesChainRulesCoreExt = "ChainRulesCore"
@@ -52,9 +52,9 @@ version = "1.1.2"
 
 [[deps.ArrayInterface]]
 deps = ["Adapt", "LinearAlgebra"]
-git-tree-sha1 = "60f11b38ebeabd984f5535838d91e197d97202f0"
+git-tree-sha1 = "b79a0bd275c2036b3ab9ed42ddef6f5eb48e1902"
 uuid = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
-version = "7.28.1"
+version = "7.29.0"
 
     [deps.ArrayInterface.extensions]
     ArrayInterfaceAMDGPUExt = "AMDGPU"
@@ -270,9 +270,9 @@ weakdeps = ["IntervalSets", "LinearAlgebra", "StaticArrays"]
 
 [[deps.CoordRefSystems]]
 deps = ["ForwardDiff", "Random", "Rotations", "StaticArrays", "Unitful"]
-git-tree-sha1 = "6fbf088b44f07d3eec21e95b66fc88ca83df84ac"
+git-tree-sha1 = "09816c7c758d72204412d8f8efbde530424387b8"
 uuid = "b46f11dc-f210-4604-bfba-323c1ec968cb"
-version = "0.19.21"
+version = "0.19.22"
 
 [[deps.CoordinateTransformations]]
 deps = ["LinearAlgebra", "StaticArrays"]
@@ -555,9 +555,10 @@ uuid = "d604d12d-fa86-5845-992e-78dc15976526"
 version = "3.14.1+0"
 
 [[deps.Gamma]]
-git-tree-sha1 = "86f86b6168a016ed88e4ae4e64577b98c3b59e8e"
+deps = ["LogExpFunctions"]
+git-tree-sha1 = "becc397f7cfb06e343496ae6ffb04818a851da51"
 uuid = "a0844989-3bd2-4988-8bea-c9407ab0941b"
-version = "1.1.0"
+version = "1.2.0"
 
 [[deps.GeoFormatTypes]]
 git-tree-sha1 = "7528a7956248c723d01a0a9b0447bf254bf4da52"
@@ -580,10 +581,10 @@ version = "1.6.2"
     RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
 
 [[deps.GeometryOps]]
-deps = ["AbstractTrees", "AdaptivePredicates", "CoordinateTransformations", "DataAPI", "DelaunayTriangulation", "ExactPredicates", "Extents", "GeoFormatTypes", "GeoInterface", "GeometryOpsCore", "LinearAlgebra", "Random", "SortTileRecursiveTree", "StaticArrays", "Statistics", "Tables"]
-git-tree-sha1 = "69db21126ecbf7fc9bf226aa8364c125bf75a001"
+deps = ["AbstractTrees", "AdaptivePredicates", "CoordinateTransformations", "DataAPI", "DelaunayTriangulation", "ExactPredicates", "Extents", "GeoFormatTypes", "GeoInterface", "GeometryOpsCore", "LinearAlgebra", "PrecompileTools", "Random", "SortTileRecursiveTree", "StaticArrays", "Statistics", "Tables"]
+git-tree-sha1 = "c8cb6ddabe30c61b30dcebbce825dd45abc3661e"
 uuid = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
-version = "0.1.42"
+version = "0.1.43"
 
     [deps.GeometryOps.extensions]
     GeometryOpsDataFramesExt = "DataFrames"
@@ -605,9 +606,9 @@ version = "0.1.42"
 
 [[deps.GeometryOpsCore]]
 deps = ["DataAPI", "GeoInterface", "StableTasks", "Tables"]
-git-tree-sha1 = "3148a79daf82235877a8a49b5a6c35b6d8cf162d"
+git-tree-sha1 = "0896ad28d34338853bd9d335fee15053d748dc58"
 uuid = "05efe853-fabf-41c8-927e-7063c8b9f013"
-version = "0.1.10"
+version = "0.1.11"
 
 [[deps.HAdaptiveIntegration]]
 deps = ["DataStructures", "LinearAlgebra", "Printf", "StaticArrays"]
@@ -763,9 +764,9 @@ version = "1.7.1"
 
 [[deps.JpegTurbo_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "1dae3057da6f2b9c857afef03177bbdc7c4afe92"
+git-tree-sha1 = "037babc10853eeb8e585418922246cb97b8e5b74"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
-version = "3.2.0+0"
+version = "3.2.0+1"
 
 [[deps.JuliaSyntaxHighlighting]]
 deps = ["StyledStrings"]
@@ -1245,9 +1246,9 @@ weakdeps = ["OffsetArrays", "StaticArrays"]
 
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
-git-tree-sha1 = "246a8bb2e6667f832eea063c3a56aef96429a3db"
+git-tree-sha1 = "fac51faf3bb96e8bc0bf6f9f39ca4955652776bb"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.9.18"
+version = "1.9.19"
 
     [deps.StaticArrays.extensions]
     StaticArraysChainRulesCoreExt = "ChainRulesCore"

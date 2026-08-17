@@ -671,15 +671,56 @@ function _shull_interp_circumcentre(x1::Float64, y1::Float64,
     return q * x1 + r * x2 + p * x3, q * y1 + r * y2 + p * y3, aspect_ratio
 end
 
-function _shull_in_convex_hull(points::AbstractMatrix, hull, x::Float64, y::Float64;
+"""Reconstruct the exposed interp SHull boundary-chain vector.
+
+R dummycoor calls in.convex.hull on the public triSht object, not SHull's
+internal hull state. For near-degenerate data those can differ because the R
+boundary-chain walk retains repeated vertices. Preserve that source behavior
+because it selects the side of each dummy circumcentre.
+"""
+function _shull_boundary_chain(trlist::AbstractMatrix{<:Integer})
+    starts = Int[]
+    ends = Int[]
+    for row in axes(trlist, 1)
+        trlist[row, 4] == 0 && (push!(starts, trlist[row, 2]); push!(ends, trlist[row, 3]))
+        trlist[row, 5] == 0 && (push!(starts, trlist[row, 3]); push!(ends, trlist[row, 1]))
+        trlist[row, 6] == 0 && (push!(starts, trlist[row, 1]); push!(ends, trlist[row, 2]))
+    end
+    count = length(starts)
+    count == 0 && return Int[]
+
+    chain = Vector{Int}(undef, count)
+    chain[1], chain[2] = starts[1], ends[1]
+    current = 2
+    while current < count
+        found = false
+        for index in 2:count
+            if chain[current] == starts[index]
+                chain[current + 1] = ends[index]
+                found = true
+            end
+        end
+        if !found
+            for index in 2:count
+                if chain[current] == ends[index]
+                    chain[current + 1] = starts[index]
+                    found = true
+                end
+            end
+        end
+        current += 1
+    end
+    return chain
+end
+
+function _shull_in_convex_hull(points::AbstractMatrix, hull::AbstractVector{<:Integer},
+                               x::Float64, y::Float64;
                                eps::Float64=1e-16)
-    # `interp::in.convex.hull()` checks each left half-plane of its CCW
-    # `chull`. SHull stores this same boundary clockwise, so traverse it in
-    # reverse to recover the R orientation.
+    # Match R in.convex.hull against its reconstructed public boundary chain.
     count = length(hull)
-    @inbounds for offset in 0:(count - 1)
-        first = hull[count - offset].id
-        second = hull[mod1(count - offset - 1, count)].id
+    @inbounds for index in 1:count
+        first = hull[index]
+        second = hull[mod1(index + 1, count)]
         x1, y1 = points[first, 1], points[first, 2]
         x2, y2 = points[second, 1], points[second, 2]
         (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) >= eps || return false
@@ -717,6 +758,7 @@ and downstream alpha-hull construction.
 function _shull_mesh(xy::AbstractMatrix, state=_shull_final_triads(xy))
     points = Matrix{Float64}(xy)
     trlist = _shull_trlist(points, state)
+    boundary_chain = _shull_boundary_chain(trlist)
     triangle_count = size(trlist, 1)
     centres = Vector{NTuple{2, Float64}}(undef, triangle_count)
     for row in axes(trlist, 1)
@@ -753,7 +795,7 @@ function _shull_mesh(xy::AbstractMatrix, state=_shull_final_triads(xy))
                 second,
                 first_centre,
                 away,
-                state.hull,
+                boundary_chain,
             )
             push!(centres, dummy)
             dummy

@@ -1,6 +1,7 @@
 module RSeed
 
-export AbstractRUniformRNG, RMersenneTwister, RLecuyerCMRG, r_rng, r_unif, r_runif, r_jitter
+export AbstractRUniformRNG, RMersenneTwister, RLecuyerCMRG, r_rng, r_unif, r_runif,
+       r_jitter, r_sample_permutation
 
 const _N = 624
 const _M = 397
@@ -194,6 +195,43 @@ end
 function r_jitter(rng::AbstractRUniformRNG, values::AbstractVector{<:Real}, amount::Real)
     offsets = r_runif(rng, length(values), -1.0, 1.0)
     return Float64.(values) .+ Float64(amount) .* offsets
+end
+
+@inline function _r_unif_index(rng::AbstractRUniformRNG, n::Integer)
+    n > 0 || return 0
+    bits = ceil(Int, log2(n))
+    while true
+        value = UInt64(0)
+        # This is R's `rbits()`: build enough 16-bit chunks, then retain the
+        # requested low-order bits.  It intentionally consumes one `runif`
+        # value even when `bits <= 16`.
+        for _ in 0:16:bits
+            value = (value << 16) + UInt64(floor(Int, r_unif(rng) * 65536))
+        end
+        value &= (UInt64(1) << bits) - UInt64(1)
+        value < n && return Int(value)
+    end
+end
+
+"""Return `sample(1:n, n, replace = FALSE)` using R's rejection sampler.
+
+This is the exact uniform no-replacement branch used by R's `sample.int()`
+for the small task sizes handled by `rangeBuilder::getDynamicAlphaHull()`.
+It is kept in `RSeed` because it is only meaningful when the caller supplies
+an R-compatible random stream.
+"""
+function r_sample_permutation(rng::AbstractRUniformRNG, n::Integer)
+    n >= 0 || throw(ArgumentError("n must be non-negative"))
+    available = collect(1:Int(n))
+    result = Vector{Int}(undef, n)
+    remaining = Int(n)
+    @inbounds for index in eachindex(result)
+        offset = _r_unif_index(rng, remaining)
+        result[index] = available[offset + 1]
+        available[offset + 1] = available[remaining]
+        remaining -= 1
+    end
+    return result
 end
 
 end

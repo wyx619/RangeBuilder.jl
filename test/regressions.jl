@@ -55,6 +55,15 @@
     @test !RangeBuilder._range_polygon_is_valid(nothing)
     @test !RangeBuilder._range_projected_polygon_is_valid(nothing)
 
+    # S2 validates geographic rings along great-circle arcs.  This ring is
+    # planar-valid but self-crosses on the sphere, so it must not terminate a
+    # dynamic alpha search before the R/S2-valid candidate is reached.
+    spherical_crossing = ah2polygon(ahull(
+        delvor([33.67 41.4905; 46.7739 39.6442; 46.3703 39.6719]; backend=:shull);
+        alpha=97,
+    ))
+    @test !RangeBuilder._range_polygon_is_valid(spherical_crossing)
+
     holey_poly = GeoInterface.Wrappers.Polygon(
         [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
          [(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0), (3.0, 3.0)]]; crs=4326)
@@ -72,6 +81,13 @@
     overlap_pts = [0.5 0.5; 1.5 0.5; 2.5 0.5]
     @test RangeBuilder._range_points_in_polygon(overlap_pts, overlap) == trues(3)
     @test RangeBuilder._range_point_intersection_counts(overlap_pts, overlap) == [1, 2, 1]
+
+    disjoint_b = GeoInterface.Wrappers.Polygon([[(4.0, 0.0), (5.0, 0.0),
+                                                   (5.0, 1.0), (4.0, 1.0),
+                                                   (4.0, 0.0)]]; crs=4326)
+    disjoint = GeoInterface.Wrappers.GeometryCollection([overlap_a, disjoint_b]; crs=4326)
+    disjoint_pts = [0.5 0.5; 4.5 0.5; 8.0 0.5]
+    @test RangeBuilder._range_point_intersection_counts(disjoint_pts, disjoint) == [1, 1, 0]
 
     # rangeBuilder uses sf with S2 enabled for WGS84 point coverage.  The
     # great-circle edge between (120, 0) and (0, 60) contains this point on
