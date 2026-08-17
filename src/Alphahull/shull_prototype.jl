@@ -671,6 +671,43 @@ function _shull_interp_circumcentre(x1::Float64, y1::Float64,
     return q * x1 + r * x2 + p * x3, q * y1 + r * y2 + p * y3, aspect_ratio
 end
 
+function _shull_in_convex_hull(points::AbstractMatrix, hull, x::Float64, y::Float64;
+                               eps::Float64=1e-16)
+    # `interp::in.convex.hull()` checks each left half-plane of its CCW
+    # `chull`. SHull stores this same boundary clockwise, so traverse it in
+    # reverse to recover the R orientation.
+    count = length(hull)
+    @inbounds for offset in 0:(count - 1)
+        first = hull[count - offset].id
+        second = hull[mod1(count - offset - 1, count)].id
+        x1, y1 = points[first, 1], points[first, 2]
+        x2, y2 = points[second, 1], points[second, 2]
+        (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) >= eps || return false
+    end
+    return true
+end
+
+function _shull_dummycoor(points::AbstractMatrix, first::Int, second::Int,
+                          centre::NTuple{2,Float64}, away::Float64, hull)
+    # This reproduces alphahull::dummycoor(). In particular, infer the
+    # exterior side from R's global convex-hull test, not from the third
+    # vertex of one (possibly near-degenerate) boundary triangle.
+    vx = points[second, 2] - points[first, 2]
+    vy = -(points[second, 1] - points[first, 1])
+    norm2 = vx^2 + vy^2
+    norm2 > 0 && ((vx, vy) = (vx / norm2, vy / norm2))
+    midpoint_x = (points[first, 1] + points[second, 1]) / 2
+    midpoint_y = (points[first, 2] + points[second, 2]) / 2
+    in_hull = _shull_in_convex_hull(
+        points,
+        hull,
+        midpoint_x + 1e-5 * vx,
+        midpoint_y + 1e-5 * vy,
+    )
+    return in_hull ? (centre[1] - away * vx, centre[2] - away * vy) :
+                     (centre[1] + away * vx, centre[2] + away * vy)
+end
+
 """Build the R-compatible twelve-column `alphahull::delvor()` mesh.
 
 The result uses the existing Julia `DelVor` mesh schema. It is intentionally
@@ -710,15 +747,14 @@ function _shull_mesh(xy::AbstractMatrix, state=_shull_final_triads(xy))
     for (row, (arc, first, second, first_triangle, second_triangle)) in enumerate(auxiliary)
         first_centre = centres[first_triangle]
         second_centre = if second_triangle == 0
-            interior = 0
-            for vertex in trlist[first_triangle, 1:3]
-                if vertex != first && vertex != second
-                    interior = vertex
-                    break
-                end
-            end
-            interior > 0 || throw(ErrorException("SHull boundary edge lacks an interior vertex"))
-            dummy = _dummycoor(points, first, second, first_centre, away, interior)
+            dummy = _shull_dummycoor(
+                points,
+                first,
+                second,
+                first_centre,
+                away,
+                state.hull,
+            )
             push!(centres, dummy)
             dummy
         else

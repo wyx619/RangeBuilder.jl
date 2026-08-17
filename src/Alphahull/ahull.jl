@@ -111,68 +111,32 @@ The mutable `arcs`, `ends`, and `points` collections correspond respectively
 to the R variables `arcs`, `indp`, and `cutp`.
 """
 function _cut_and_order!(arcs, ends, points)
-    initial_count = length(arcs)
-    origins = collect(1:initial_count)
-    # Keep only geometrically possible circle pairs. The previous dense
-    # `a × a` matrix was both allocation-heavy and needlessly scanned for
-    # every arc. A sweep on circle bounding boxes preserves the original
-    # origin order while constructing a sparse adjacency list.
-    can_intersect = [Int[] for _ in 1:initial_count]
-    order_x = sortperm(1:initial_count; by=i -> arcs[i][1] - arcs[i][3])
-    for oi in eachindex(order_x)
-        i = order_x[oi]
-        ai = arcs[i]
-        axmax = ai[1] + ai[3]
-        for oj in (oi + 1):length(order_x)
-            j = order_x[oj]
-            aj = arcs[j]
-            aj[1] - aj[3] > axmax && break
-            abs(ai[2] - aj[2]) > ai[3] + aj[3] && continue
-            dx, dy = ai[1] - aj[1], ai[2] - aj[2]
-            distance2 = dx * dx + dy * dy
-            lower = abs(ai[3] - aj[3])
-            upper = ai[3] + aj[3]
-            if lower * lower < distance2 < upper * upper
-                push!(can_intersect[i], j)
-                push!(can_intersect[j], i)
-            end
-        end
-    end
-    for candidates in can_intersect
-        sort!(candidates)
-    end
-    origin_arcs = [[i] for i in 1:initial_count]
+    # R walks a dynamically growing watch-by-j matrix. Preserving its source
+    # order is necessary because each cut can change later endpoint states.
     watch = 1
+    case = 0
+    case_defined = false
     while watch <= length(arcs)
-        watch_origin = origins[watch]
-        candidates = Int[]
-        for candidate_origin in can_intersect[watch_origin]
-            append!(candidates, origin_arcs[candidate_origin])
-        end
-        sort!(candidates)
-        candidate_position = 1
-        while candidate_position <= length(candidates)
-            j = candidates[candidate_position]
-            aw, aj = arcs[watch], arcs[j]
-            adjacent = can_intersect[watch_origin]
-            position = searchsortedfirst(adjacent, origins[j])
-            if position <= length(adjacent) && adjacent[position] == origins[j]
-                    ci = inter(aw[1], aw[2], aw[3], aj[1], aj[2], aj[3])
-                    if ci.n_cut == 2
+        j = 1
+        while j <= length(arcs)
+            if j != watch
+                aw, aj = arcs[watch], arcs[j]
+                ci = inter(aw[1], aw[2], aw[3], aj[1], aj[2], aj[3])
+                if ci.n_cut == 2
                     ad = _angle_data(aw[4], aw[5], aw[6], ci.v1[1], ci.v1[2], ci.theta1)
                     shared = ends[watch][1] == ends[j][1] || ends[watch][1] == ends[j][2] ||
                              ends[watch][2] == ends[j][1] || ends[watch][2] == ends[j][2]
                     if shared && ends[watch][1] == ends[j][2]
-                        case = ad.order == _ORDER_1324 ? 2 :
-                               ad.order == _ORDER_3412 ? 1 : 0
+                        next_case = ad.order == _ORDER_1324 ? 2 :
+                                    ad.order == _ORDER_3412 ? 1 : 0
                         if ad.order == _ORDER_3142
-                            case = abs((ad.angle1 - ad.angle3) / 2) < 1e-5 ? 2 : 1
+                            next_case = abs((ad.angle1 - ad.angle3) / 2) < 1e-5 ? 2 : 1
                         end
-                        # R alphahull leaves `case` unbound for every other
-                        # endpoint-order configuration, then reads it below.
-                        # That makes the whole candidate fail; returning an
-                        # ordinary arc here would accept alphas R skips.
-                        case == 0 && throw(ArgumentError(
+                        # R assigns `case <- 0` only after an earlier
+                        # `j != watch` iteration. An unsupported first pair
+                        # errors; later unsupported pairs retain zero.
+                        next_case != 0 && (case = next_case)
+                        case == 0 && !case_defined && throw(ArgumentError(
                             "alpha-hull arc cut has an undefined R case",
                         ))
                         if case == 2
@@ -187,15 +151,13 @@ function _cut_and_order!(arcs, ends, points)
                             ends[j] = (ends[j][1], inn)
                         end
                     elseif shared && ends[watch][2] == ends[j][1]
-                        case = ad.order == _ORDER_1324 ? 2 :
-                               ad.order == _ORDER_1234 ? 1 : 0
+                        next_case = ad.order == _ORDER_1324 ? 2 :
+                                    ad.order == _ORDER_1234 ? 1 : 0
                         if ad.order == _ORDER_1324_ALT
-                            case = abs((ad.angle2 - ad.angle4) / 2) < 1e-5 ? 2 : 1
+                            next_case = abs((ad.angle2 - ad.angle4) / 2) < 1e-5 ? 2 : 1
                         end
-                        # See the preceding shared-endpoint branch. This is
-                        # an intentional compatibility failure, not a new
-                        # geometry classification.
-                        case == 0 && throw(ArgumentError(
+                        next_case != 0 && (case = next_case)
+                        case == 0 && !case_defined && throw(ArgumentError(
                             "alpha-hull arc cut has an undefined R case",
                         ))
                         if case == 2
@@ -217,8 +179,6 @@ function _cut_and_order!(arcs, ends, points)
                             middle2 = (ad.angle2 - ad.angle4) / 2
                             nvx2, nvy2 = _rotate(1.0, 0.0, -aw[6] + middle2 - ad.angox)
                             push!(arcs, [aw[1], aw[2], aw[3], nvx2, nvy2, middle2])
-                            push!(origins, origins[watch])
-                            push!(origin_arcs[origins[watch]], length(arcs))
                             aw[4], aw[5], aw[6] = nvx1, nvy1, middle1
                             q1x, q1y = _rotate(nvx1, nvy1, -middle1)
                             q2x, q2y = _rotate(nvx2, nvy2, middle2)
@@ -236,17 +196,13 @@ function _cut_and_order!(arcs, ends, points)
                             newarc = [aj[1], aj[2], aj[3], aj[4], aj[5], aj[6]]
                             _arc_from_endpoints!(newarc, points, inn2, old_j_start)
                             push!(arcs, newarc)
-                            push!(origins, origins[j])
-                            push!(origin_arcs[origins[j]], length(arcs))
-                            adjacent = can_intersect[watch_origin]
-                            position = searchsortedfirst(adjacent, origins[j])
-                            position <= length(adjacent) && adjacent[position] == origins[j] &&
-                                push!(candidates, length(arcs))
                         end
                     end
                     end
+                case = 0
+                case_defined = true
             end
-            candidate_position += 1
+            j += 1
         end
         watch += 1
     end
