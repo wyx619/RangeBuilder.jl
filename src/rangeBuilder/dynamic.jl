@@ -173,6 +173,20 @@ function _range_try_ahull(points::AbstractMatrix, alpha::Real, backend::Symbol, 
     end
 end
 
+function _range_try_ahull_with_duplicate_status(points::AbstractMatrix,
+                                                alpha::Real,
+                                                backend::Symbol,
+                                                rng)
+    try
+        return (; hull=ahull(delvor(points; backend=backend, rng=rng); alpha),
+                duplicate=false)
+    catch error
+        duplicate = error isa ArgumentError &&
+                    occursin("duplicate data points", sprint(showerror, error))
+        return (; hull=nothing, duplicate)
+    end
+end
+
 function _range_try_ahull(delaunay::DelVor, alpha::Real)
     return try
         ahull(delaunay; alpha)
@@ -524,14 +538,18 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     shull_rebuild = backend === :shull
     initial_alpha_hull = nothing
     if shull_rebuild
-        # `rangeBuilder` calls `ahull()` once to finish duplicate removal, then
-        # calls it again before the alpha loop. Every following candidate also
-        # rebuilds SHull and can consume a different jitter stream. A supplied
-        # `RSeed` makes that stream identical to R; other Julia RNGs retain
-        # the same call sequence without claiming bitwise R randomness.
-        points = _range_drop_shull_float32_duplicates(points)
+        # R attempts alpha, removes one closest point only after an `interp`
+        # duplicate-points failure, and then calls alpha once more after that
+        # recovery loop. Failed jitter retries can therefore consume RNG.
+        while size(points, 1) >= 3
+            initial_attempt = _range_try_ahull_with_duplicate_status(
+                points, alpha, backend, rng,
+            )
+            initial_attempt.duplicate || break
+            drop_index, _ = _range_geodesic_closest_point_pair(points)
+            points = points[[index for index in axes(points, 1) if index != drop_index], :]
+        end
         size(points, 1) >= 3 || throw(ArgumentError("at least three points remain after SHull duplicate removal"))
-        _range_try_ahull(points, alpha, backend, rng)
         initial_alpha_hull = _range_try_ahull(points, alpha, backend, rng)
         while alpha <= cap && isnothing(initial_alpha_hull)
             alpha += alphaIncrement

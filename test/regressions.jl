@@ -35,6 +35,17 @@
     float32_collision = [116.0 39.0; 116.0000001 39.0; 117.0 39.0;
                          116.0 40.0; 117.0 40.0]
     @test RangeBuilder._shull_float32_duplicate_pair(float32_collision) == (1, 2)
+    signed_zero_collision = [-0.0 0.0; 0.0 -0.0; 1.0 1.0]
+    @test RangeBuilder._shull_float32_duplicate_pair(signed_zero_collision) == (1, 2)
+    @test_throws ArgumentError delvor(signed_zero_collision; backend=:shull)
+    shull_duplicate_status = RangeBuilder._range_try_ahull_with_duplicate_status(
+        float32_collision,
+        1.0,
+        :shull,
+        MersenneTwister(0),
+    )
+    @test isnothing(shull_duplicate_status.hull)
+    @test shull_duplicate_status.duplicate
     shull_dropped = RangeBuilder._range_drop_duplicate_points(float32_collision; backend=:shull)
     @test shull_dropped !== nothing
     @test size(shull_dropped.x, 1) == 4

@@ -15,7 +15,14 @@ function _shull_float32_duplicate_pair(xy::AbstractMatrix)
     seen = Dict{Tuple{Float32, Float32}, Int}()
     sizehint!(seen, size(xy, 1))
     for index in axes(xy, 1)
-        key = (Float32(xy[index, 1]), Float32(xy[index, 2]))
+        x = Float32(xy[index, 1])
+        y = Float32(xy[index, 2])
+        # C++ compares SHull's float coordinates with `==`, for which signed
+        # zeroes are equal. Julia Dict keys use `isequal`, so canonicalise
+        # zero before checking the Float32 topology representation.
+        x == 0f0 && (x = 0f0)
+        y == 0f0 && (y = 0f0)
+        key = (x, y)
         first_index = get(seen, key, 0)
         first_index == 0 || return (first_index, index)
         seen[key] = index
@@ -254,6 +261,9 @@ function _shull_incremental_triads(xy::AbstractMatrix)
                     if visible < 0f0
                         deleteat!(hull, h)
                         numh -= 1
+                        # C++ decrements its `for` index before the loop's
+                        # increment, so the shifted facet is checked again.
+                        continue
                     else
                         candidate.tr = hull[h].r - candidate.r
                         candidate.tc = hull[h].c - candidate.c
@@ -597,6 +607,10 @@ function _shull_final_triads(xy::AbstractMatrix; rng=Random.MersenneTwister(0))
         # before exposing tri.mesh. Its C++ trlist is nevertheless oriented
         # against these Float64 jitter coordinates, so retain them separately.
         jittered_xy = _shull_jittered_points(xy; rng=rng)
+        # The C++ implementation applies its Float32 duplicate guard again
+        # to jittered coordinates before entering the SHull state machine.
+        isnothing(_shull_float32_duplicate_pair(jittered_xy)) ||
+            throw(ArgumentError("duplicate data points"))
         state = _shull_incremental_triads(jittered_xy)
         return (; _shull_flip_triads!(state)..., orientation_xy=jittered_xy)
     end

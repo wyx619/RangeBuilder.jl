@@ -58,6 +58,8 @@ function delvor(x, y=nothing; rng=Random.MersenneTwister(0),
     xy = _points(x, y)
     if backend === :shull
         randomise && throw(ArgumentError("the deterministic SHull backend does not support randomise=true"))
+        isnothing(_shull_float32_duplicate_pair(xy)) ||
+            throw(ArgumentError("duplicate data points"))
         shull = _shull_final_triads(xy; rng=rng)
         return DelVor(xy, _shull_mesh(xy, shull), shull)
     end
