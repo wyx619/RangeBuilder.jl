@@ -596,11 +596,12 @@ end
 
 """Build R-compatible `interp::tri.mesh()\$trlist` rows from final SHull triads.
 
-The SHull core stores clockwise triads. `shullDeltri.cpp` conditionally swaps
-the final two vertices using the original Float64 coordinates before exposing
-them to R; this helper reproduces that conversion and keeps the C++ triad row
-order intact. Arc indices are then assigned in the same first-seen order as
-`shullDeltri.cpp`.
+Julia's internal triads require the established nonzero-orientation conversion
+to match the C++ output. A zero determinant is distinct: after a jitter retry
+`tri.mesh()` restores the original coordinates but retains the jitter-derived
+triad order. The C++ code does not normalize that now-collinear triple, which
+lets its NaN circumcentre propagate through `alphahull::complement()`. Arc
+indices are assigned in the same first-seen order as `shullDeltri.cpp`.
 """
 function _shull_trlist(xy::AbstractMatrix, state=_shull_final_triads(xy))
     size(xy, 2) == 2 || throw(ArgumentError("xy must have two columns"))
@@ -610,7 +611,7 @@ function _shull_trlist(xy::AbstractMatrix, state=_shull_final_triads(xy))
                       (xy[triad.b, 2] - xy[triad.a, 2]) +
                       (xy[triad.c, 2] - xy[triad.b, 2]) *
                       (xy[triad.a, 1] - xy[triad.b, 1])
-        if orientation < 0
+        if orientation <= 0
             rows[row, 1:6] .= (triad.a, triad.b, triad.c, triad.bc, triad.ac, triad.ab)
         else
             rows[row, 1:6] .= (triad.a, triad.c, triad.b, triad.bc, triad.ab, triad.ac)
