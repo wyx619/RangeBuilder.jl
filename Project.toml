@@ -5,24 +5,27 @@ authors = ["RangeBuilder contributors"]
 
 [deps]
 DelaunayTriangulation = "927a84f5-c5f4-47a5-9785-b46e178433df"
-Meshes = "eacbb407-ea5a-433e-ab97-5258b1ca43fa"
-Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
-LibGEOS = "a90b1aa1-3769-5649-ba7e-abc5a9d163eb"
-Proj = "c94c279d-25a6-4763-9509-64d165bea63e"
+GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+LibGEOS = "a90b1aa1-3769-5649-ba7e-abc5a9d163eb"
+Meshes = "eacbb407-ea5a-433e-ab97-5258b1ca43fa"
+Proj = "c94c279d-25a6-4763-9509-64d165bea63e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Rasters = "a3a2b9e3-a471-40c9-b274-f788e487c689"
+S2Geography = "1ece8e93-3e15-4f65-8d0f-0986d38d672b"
 
 [compat]
 DelaunayTriangulation = "1.6.6"
-Meshes = "0.57.25"
-GeometryOps = "0.1"
 GeoInterface = "1"
-LibGEOS = "0.9"
-Proj = "1"
+GeometryOps = "0.1"
 JLD2 = "0.6"
+LibGEOS = "0.9"
+Meshes = "0.57.25"
+Proj = "1"
 Rasters = "0.15"
+S2Geography = "0.1.0"
+
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 

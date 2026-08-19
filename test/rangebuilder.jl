@@ -18,6 +18,29 @@
     empty!(RangeBuilder._range_land_buffer_cache)
     @test filterByLand([116.0 39.0; 0.0 0.0]; coastScale=50) == Union{Missing,Bool}[true, false]
 
+    antimeridian_points = [
+        -179.7058 71.07439; -179.7584 71.1759; -179.4098 71.17809;
+        -173.141667 64.78; -173.086667 64.83; 174.33 65.5;
+        -179.583 70.95; -171.226 65.645
+    ]
+    antimeridian_range = getDynamicAlphaHull(
+        antimeridian_points;
+        fraction=0.95,
+        partCount=3,
+        buff=10_000,
+        initialAlpha=2,
+        alphaIncrement=1,
+        alphaCap=400,
+        clipToCoast=:terrestrial,
+        backend=:shull,
+        rng=RangeBuilder.RSeed.r_rng([
+            10407, -1869255335, 1054321574, 982794370,
+            -306250840, -2080751448, -1300630003,
+        ]),
+    )
+    @test antimeridian_range.alpha == "alphaMCH"
+    @test antimeridian_range.hull !== nothing
+
     dynamic_points = [0.0 0.0; 1.0 0.0; 1.0 1.0; 0.0 1.0; 0.5 0.5]
     dynamic = getDynamicAlphaHull(dynamic_points; fraction=0.8, partCount=3, buff=0,
                                   initialAlpha=0.7, alphaIncrement=0.1,

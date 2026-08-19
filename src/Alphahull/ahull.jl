@@ -94,7 +94,13 @@ function _initial_arcs(sh, cp)
         isnothing(summary) && continue
         0 < summary.first_side_count < summary.count && continue
         k = summary.smallest_ball
-        k == 0 && continue
+        # R `ahull()` calls `min()` on the positive-radius complement rows
+        # for every selected alpha-shape edge. With no such row it errors
+        # (`replacement has length zero`) rather than silently omitting the
+        # edge. That failure is part of rangeBuilder's alpha retry path.
+        k == 0 && throw(ArgumentError(
+            "alpha-hull complement has no positive radius for an R-selected edge",
+        ))
         arc = [cp[k, 1], cp[k, 2], cp[k, 3], cp[k, 17], cp[k, 18], cp[k, 19]]
         pmx, pmy = (cp[k, 6] + cp[k, 8]) / 2, (cp[k, 7] + cp[k, 9]) / 2
         tx, ty = _rotate(arc[4], arc[5], arc[6])

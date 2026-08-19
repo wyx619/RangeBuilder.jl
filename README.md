@@ -109,6 +109,20 @@ run_family_ranges(
 The run writes `all_species_range_summary.csv`, the species-grid distribution,
 and `workflow_timings.csv` to the selected output directory.
 
+### S2-compatible coast clipping
+
+Julia buffers each accepted range in Equal Earth, inverse-projects it to WGS84,
+and then performs terrestrial or aquatic clipping with `S2Geography.jl`. This
+package binds Google's S2 geometry engine, the same spherical backend used by
+the original R `sf` workflow when `sf_use_s2(TRUE)` is active. Great-circle
+coast boundaries, antimeridian crossings, and multi-feature output are therefore
+handled without R or `RCall` at runtime.
+
+The alpha-hull and Delaunay stages remain unchanged. `S2Geography` is used only
+for the final geographic coast overlay; the resulting WKB is fed back into the
+existing Julia/GeoInterface grid locator. The bundled Natural Earth 50m land
+geometry is used offline.
+
 ## Use
 
 ```julia

@@ -2,6 +2,13 @@
 
 [English README](README.md)
 
+## 与 S2 对齐的海岸裁剪
+
+Julia 先在 Equal Earth 投影中完成缓冲，再将结果转换回 WGS84，最后使用
+`S2Geography.jl` 执行陆地/海洋裁剪。该包直接绑定 Google S2，和原始 R 工作流在
+`sf_use_s2(TRUE)` 时使用的球面后端一致，因此能处理大圆弧边界、反经线和多要素结果，
+且运行时不需要 R 或 `RCall`。
+
 `RangeBuilder.jl` 是对 R `alphahull` 计算接口的 JuliaGeometry 实现。几何核心不依赖
 R，基于 `DelaunayTriangulation.jl`；`RCall.jl` 只用于回归与参考对照测试，不是运行时依赖。
 
@@ -111,6 +118,10 @@ batch = buildRanges(Dict("species_a" => points, "species_b" => points[1:2, :]);
 `getDynamicAlphaHull()` 返回 `(hull, alpha)`：`hull` 是实现 GeoInterface 的多边形几何，
 `alpha` 是最终选定的 alpha；若回退到凸包，则为 `"alphaMCH"`。`buff` 单位为米；
 海岸裁切使用内置的 Natural Earth 1:50m 陆地数据，因此可离线运行。
+
+alpha-hull、Delaunay 和动态 alpha 搜索逻辑保持不变；S2 只负责最终的地理海岸叠置。
+叠置结果通过 WKB 返回现有 Julia/GeoInterface 网格定位器。内置 Natural Earth 1:50m
+陆地数据可离线使用。
 
 `rasterStackFromPolyList()` 接收 GeoInterface 多边形的具名元组或字典，返回
 `Rasters.RasterStack`。每个图层中，栅格中心落在多边形内的像元为 `1`，其他为

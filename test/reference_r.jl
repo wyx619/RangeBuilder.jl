@@ -9,6 +9,8 @@ using Random
 using RCall
 using RangeBuilder
 
+RCall.reval("options(warn = -1)")
+
 function r_delvor(points)
     @rput points
     RCall.reval("library(alphahull)")

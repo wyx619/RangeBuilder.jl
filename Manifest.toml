@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "a957c3461e445dd6feb642a45070b15c52e5cb4b"
+project_hash = "98ed122db03d709a60e49fa60f5bcfab95b95142"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "5970c86505ae9c07bf5bc521ef2bbbb3849e8b7b"
@@ -1008,6 +1008,24 @@ git-tree-sha1 = "40b9edad2e5287e05bd413a38f61a8ff55b9557b"
 uuid = "5eaf0fd0-dfba-4ccb-bf02-d820a40db705"
 version = "0.2.1"
 
+[[deps.S2Geography]]
+deps = ["Extents", "GeoFormatTypes", "GeoInterface", "S2Geography_jll", "WellKnownGeometry"]
+git-tree-sha1 = "9100932f109c8add08a91d428d57edeb18ac958f"
+uuid = "1ece8e93-3e15-4f65-8d0f-0986d38d672b"
+version = "0.1.0"
+
+[[deps.S2Geography_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "OpenSSL_jll", "S2Geometry_jll", "abseil_cpp_jll", "nanoarrow_jll"]
+git-tree-sha1 = "8b1f282d0fef6193910cd9b6ec21cbcbc7dd3ac7"
+uuid = "e70b04b4-ac82-5d66-a4c6-86165034a7c0"
+version = "0.4.0+0"
+
+[[deps.S2Geometry_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "OpenSSL_jll", "abseil_cpp_jll"]
+git-tree-sha1 = "55383ba9225325be8bd394bfa929750e26654966"
+uuid = "846536d6-5c10-5069-b47f-45525c463cf9"
+version = "0.14.0+1"
+
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 version = "0.7.0"
@@ -1216,6 +1234,20 @@ version = "1.28.0"
     NaNMath = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
     Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
+[[deps.WellKnownGeometry]]
+deps = ["GeoFormatTypes", "GeoInterface"]
+git-tree-sha1 = "7954cccbdf5af33a677ad7e8a4436f073703fe61"
+uuid = "0f680547-7be7-4555-8820-bb198eeb646b"
+version = "0.2.7"
+
+    [deps.WellKnownGeometry.extensions]
+    WellKnownGeometryMakieExt = "Makie"
+    WellKnownGeometryRecipesBaseExt = "RecipesBase"
+
+    [deps.WellKnownGeometry.weakdeps]
+    Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+    RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
+
 [[deps.XZ_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "b29c22e245d092b8b4e8d3c09ad7baa586d9f573"
@@ -1233,6 +1265,12 @@ git-tree-sha1 = "446b23e73536f84e8037f5dce465e92275f6a308"
 uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
 version = "1.5.7+1"
 
+[[deps.abseil_cpp_jll]]
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "64395f1263c7ed64e16a8d03b289151c3beaaccd"
+uuid = "43133aba-3931-5066-b004-a34c79b93f2e"
+version = "20250814.1.0+0"
+
 [[deps.dlfcn_win32_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "e141d67ffe550eadfb5af1bdbdaf138031e4805f"
@@ -1243,6 +1281,12 @@ version = "1.4.2+0"
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
 version = "5.15.0+0"
+
+[[deps.nanoarrow_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "d9fe802c682b7777feb652debe4cebbfa7bbbe46"
+uuid = "c104a5b5-1715-5fd7-8664-28eaad6c5848"
+version = "0.7.0+0"
 
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]

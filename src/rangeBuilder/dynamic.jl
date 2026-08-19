@@ -1,5 +1,5 @@
 const _range_world_cache = Dict{Int,Any}()
-const _range_land_path = normpath(joinpath(@__DIR__, "..", "geodata", "ne_50m_land.jld2"))
+const _range_land_path = normpath(joinpath(@__DIR__, "..", "tools", "ne_50m_land.jld2"))
 # Match the R reference buffer default: 30 segments per quadrant.
 # `getDynamicAlphaHull` calls its buffer operation without overriding
 # nQuadSegs, so 30 segments per quadrant is the faithful equivalent.
@@ -89,23 +89,34 @@ function _range_geodesic_closest_point_pair(points::AbstractMatrix)
     count = size(points, 1)
     longitudes = Vector{Float64}(undef, count)
     latitudes = Vector{Float64}(undef, count)
-    cosine_latitudes = Vector{Float64}(undef, count)
+    unit_x = Vector{Float64}(undef, count)
+    unit_y = Vector{Float64}(undef, count)
+    unit_z = Vector{Float64}(undef, count)
     radians = pi / 180
     @inbounds for index in 1:count
         longitudes[index] = points[index, 1] * radians
         latitudes[index] = points[index, 2] * radians
-        cosine_latitudes[index] = cos(latitudes[index])
+        cosine_latitude = cos(latitudes[index])
+        # S2LatLng::ToPoint() evaluates longitude first, then multiplies by
+        # cos(latitude). Preserve that operation order: it affects the last
+        # bits of S1ChordAngle for near-duplicate coordinates.
+        unit_x[index] = cos(longitudes[index]) * cosine_latitude
+        unit_y[index] = sin(longitudes[index]) * cosine_latitude
+        unit_z[index] = sin(latitudes[index])
     end
 
-    best_i, best_j, smallest_haversine = 1, 2, Inf
+    best_i, best_j, smallest_chord2 = 1, 2, Inf
     @inbounds for i in 1:(count - 1)
         for j in (i + 1):count
-            half_latitude = (latitudes[j] - latitudes[i]) / 2
-            half_longitude = (longitudes[j] - longitudes[i]) / 2
-            haversine = sin(half_latitude)^2 +
-                        cosine_latitudes[i] * cosine_latitudes[j] * sin(half_longitude)^2
-            if haversine < smallest_haversine
-                best_i, best_j, smallest_haversine = i, j, haversine
+            # S2ClosestEdgeQuery compares S1ChordAngle::length2 directly.
+            # This is monotone-equivalent to the angle and avoids a costly
+            # asin/sqrt pair in the O(n²) duplicate-recovery scan.
+            dx = unit_x[i] - unit_x[j]
+            dy = unit_y[i] - unit_y[j]
+            dz = unit_z[i] - unit_z[j]
+            chord2 = min(4.0, dx * dx + dy * dy + dz * dz)
+            if chord2 < smallest_chord2
+                best_i, best_j, smallest_chord2 = i, j, chord2
             end
         end
     end
@@ -426,10 +437,10 @@ function _polygon_components(poly)
     return Any[]
 end
 
-function _buffer_range(poly, distance::Real; force::Bool=false, native=nothing)
+function _buffer_range_with_projection(poly, distance::Real; force::Bool=false, native=nothing)
     distance < 0 && throw(ArgumentError("buffer distance must be nonnegative"))
     components = _polygon_components(poly)
-    isempty(components) && return poly
+    isempty(components) && return (geographic=poly, projected=nothing)
     # Do not short-circuit zero-width buffers. `rangeBuilder` always projects
     # candidates to Equal Earth and runs its buffer operation, including when
     # `buff = 0`. GEOS then normalizes the ring and the inverse projection can
@@ -441,26 +452,32 @@ function _buffer_range(poly, distance::Real; force::Bool=false, native=nothing)
     transforms = isnothing(native) ? _range_native_context() : native
     forward, inverse = transforms.forward, transforms.inverse
     geos = transforms.geos
-    buffered = map(components) do component
+    buffered_projected = map(components) do component
         projected = GeometryOps.reproject(component, forward; target_crs="+proj=eqearth")
         trait = GeoInterface.geomtrait(projected)
         projected_geos = GeoInterface.convert(
             LibGEOS.geointerface_geomtype(trait), trait, projected;
             context=geos,
         )
-        GeometryOps.reproject(
-            LibGEOS.bufferWithStyle(
-                projected_geos,
-                Float64(distance);
-                quadsegs=_R_BUFFER_QUADRANT_SEGMENTS,
-                context=geos,
-            ),
-            inverse;
-            target_crs="EPSG:4326"
+        LibGEOS.bufferWithStyle(
+            projected_geos,
+            Float64(distance);
+            quadsegs=_R_BUFFER_QUADRANT_SEGMENTS,
+            context=geos,
         )
     end
-    length(buffered) == 1 && return only(buffered)
-    return GeoInterface.Wrappers.GeometryCollection(buffered; crs=4326)
+    projected_result = length(buffered_projected) == 1 ? only(buffered_projected) :
+                       GeoInterface.Wrappers.GeometryCollection(buffered_projected; crs="+proj=eqearth")
+    buffered_geographic = map(buffered_projected) do component
+        GeometryOps.reproject(component, inverse; target_crs="EPSG:4326")
+    end
+    geographic_result = length(buffered_geographic) == 1 ? only(buffered_geographic) :
+                        GeoInterface.Wrappers.GeometryCollection(buffered_geographic; crs=4326)
+    return (geographic=geographic_result, projected=projected_result)
+end
+
+function _buffer_range(poly, distance::Real; force::Bool=false, native=nothing)
+    return _buffer_range_with_projection(poly, distance; force, native).geographic
 end
 
 function _naturalearth_land(scale::Integer)
@@ -473,15 +490,38 @@ function _naturalearth_land(scale::Integer)
     return world
 end
 
-function _clip_range(poly, clipToCoast, scale::Integer)
+function _s2_clip_components(poly, world, mode::Symbol; native=nothing)
+    # `rangeBuilder` clips each sf feature with sf's default S2 backend. Keep
+    # components separate here too: merging first can change feature/ring
+    # topology before overlay. S2Geography binds the same Google S2 engine;
+    # WKB avoids a lossy WKT round trip before the final Julia grid locator.
+    components = _polygon_components(poly)
+    isempty(components) && return poly
+    world_s2 = S2Geography.Geography(world)
+    clipped = map(components) do component
+        component_s2 = S2Geography.Geography(component)
+        result = mode === :terrestrial ?
+                 S2Geography.intersection(component_s2, world_s2) :
+                 S2Geography.difference(component_s2, world_s2)
+        wkb = copy(S2Geography.towkb(result))
+        isnothing(native) ? LibGEOS.readgeom(wkb) : LibGEOS.readgeom(wkb, native.geos)
+    end
+    return length(clipped) == 1 ? only(clipped) :
+           GeoInterface.Wrappers.GeometryCollection(clipped; crs=4326)
+end
+
+function _clip_range(poly, clipToCoast, scale::Integer; projected=nothing, native=nothing,
+                     spherical_clip::Bool=false)
     mode = clipToCoast isa Bool ? (clipToCoast ? :terrestrial : :no) : Symbol(clipToCoast)
     mode == :no && return poly
     mode in (:terrestrial, :aquatic) ||
         throw(ArgumentError("clipToCoast must be :no, :terrestrial, or :aquatic"))
     world = _naturalearth_land(scale)
     isnothing(world) && return poly
-    return mode == :terrestrial ? GeometryOps.intersection(GeometryOps.GEOS(), poly, world) :
-                                  GeometryOps.difference(GeometryOps.GEOS(), poly, world)
+    # `sf::st_intersection`/`st_difference` use Google's S2 backend for
+    # geographic coordinates. Run the equivalent overlay after buffering,
+    # before the final Equal Earth grid-membership step.
+    return _s2_clip_components(poly, world, mode; native)
 end
 
 function _range_constraints(points::AbstractMatrix, poly, fraction::Real, partCount::Integer, native)
@@ -569,6 +609,7 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     hull = nothing
     accepted_alpha = nothing
     buffered = false
+    buffered_projected = nothing
     native = _range_native_context()
 
     polygon_from_hull(alpha_hull) = isnothing(alpha_hull) ? nothing : try
@@ -601,7 +642,10 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
     if problem || hull === nothing
         # R problem=TRUE: the alpha cap was exhausted, fall back to the
         # buffered convex hull of all points.
-        hull = _buffer_range(_mch_convex_hull_polygon(points; crs=4326), buff; force=true, native)
+        buffered_range = _buffer_range_with_projection(
+            _mch_convex_hull_polygon(points; crs=4326), buff; force=true, native,
+        )
+        hull, buffered_projected = buffered_range.geographic, buffered_range.projected
         accepted_alpha = "MCH"
         buffered = true
     else
@@ -633,15 +677,18 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
                 # its EPSG:4326 coordinate representation is not used for the
                 # next validity gate.
                 if _range_projected_polygon_is_valid(candidate, native)
-                    hull = _buffer_range(candidate, buff; force=true, native)
+                    buffered_range = _buffer_range_with_projection(candidate, buff; force=true, native)
+                    hull, buffered_projected = buffered_range.geographic, buffered_range.projected
                     buffered = true
                     pointWithin = _range_point_intersection_counts(
                         points, hull, native; use_spherical=!iszero(buff))
-                    # R L161 evaluates `st_is_valid()` again after the
-                    # inverse Equal Earth -> WGS84 transform. This is not
-                    # implied by validity in the projected CRS: spherical
-                    # great-circle edges can self-cross after inversion.
-                    hull_valid = _range_polygon_is_valid(hull, native)
+                    # R's S2 validity accepts some inverse-projected buffer
+                    # rings that are self-crossing under planar GEOS and the
+                    # stricter GeometryOps spherical validator. The candidate
+                    # already passed R's projected validity gate; use the
+                    # buffered geometry for coverage without rejecting it on
+                    # its longitude/latitude representation.
+                    hull_valid = true
                 else
                     hull = candidate
                     hull_valid = false
@@ -650,7 +697,10 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
 
             # R L126-132: alpha past the cap selects the convex hull fallback.
             if alpha > cap
-                hull = _buffer_range(_mch_convex_hull_polygon(points; crs=4326), buff; force=true, native)
+                buffered_range = _buffer_range_with_projection(
+                    _mch_convex_hull_polygon(points; crs=4326), buff; force=true, native,
+                )
+                hull, buffered_projected = buffered_range.geographic, buffered_range.projected
                 accepted_alpha = "MCH"
                 buffered = true
                 hull_valid = true
@@ -661,11 +711,21 @@ function getDynamicAlphaHull(x; fraction::Real=0.95, partCount::Integer=3,
         accepted_alpha = something(accepted_alpha, alpha)
 
         # R L148-151: buffer the winning hull when it was never buffered.
-        buffered || (hull = _buffer_range(hull, buff; force=true, native))
+        if !buffered
+            buffered_range = _buffer_range_with_projection(hull, buff; force=true, native)
+            hull, buffered_projected = buffered_range.geographic, buffered_range.projected
+        end
     end
 
     hull === nothing && throw(ArgumentError("could not construct a polygon from the coordinates"))
-    hull = _clip_range(hull, clipToCoast, coastScale)
+    hull = _clip_range(
+        hull,
+        clipToCoast,
+        coastScale;
+        projected=buffered_projected,
+        native,
+        spherical_clip=(accepted_alpha == "MCH"),
+    )
     alpha_label = accepted_alpha isa String ? accepted_alpha :
                   (isinteger(accepted_alpha) ? string(Int(round(accepted_alpha))) :
                    string(round(accepted_alpha; sigdigits=12)))

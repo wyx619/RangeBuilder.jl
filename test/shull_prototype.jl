@@ -5,6 +5,8 @@ using RCall
 using Test
 using RangeBuilder
 
+RCall.reval("options(warn = -1)")
+
 function r_shull_edges(points)
     x = points[:, 1]
     y = points[:, 2]

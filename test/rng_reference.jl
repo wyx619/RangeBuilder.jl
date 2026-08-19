@@ -6,6 +6,8 @@ using RCall
 using Test
 using RangeBuilder
 
+RCall.reval("options(warn = -1)")
+
 @testset "Original R reference: RNG and jitter" begin
     RCall.reval(
         "RNGkind(\"L'Ecuyer-CMRG\"); " *

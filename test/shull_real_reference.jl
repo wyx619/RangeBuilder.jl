@@ -4,6 +4,8 @@ using RCall
 using Test
 using RangeBuilder
 
+RCall.reval("options(warn = -1)")
+
 const REAL_OCCURRENCE_FILE = "E:/Rosales/native_records.csv.gz"
 
 function r_real_species_points(species::String)
