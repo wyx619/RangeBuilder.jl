@@ -1,5 +1,6 @@
 const _range_world_cache = Dict{Int,Any}()
 const _range_land_path = normpath(joinpath(@__DIR__, "..", "tools", "ne_50m_land.jld2"))
+const _one_degree_map_path = normpath(joinpath(@__DIR__, "..", "tools", "OneDegreeMap.jld2"))
 # Match the R reference buffer default: 30 segments per quadrant.
 # `getDynamicAlphaHull` calls its buffer operation without overriding
 # nQuadSegs, so 30 segments per quadrant is the faithful equivalent.

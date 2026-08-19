@@ -1,256 +1,122 @@
 # RangeBuilder.jl
 
-A JuliaGeometry implementation of the computational API in R `alphahull`.
-The geometry kernel is independent of R and uses `DelaunayTriangulation.jl`.
-`RCall.jl` is only used by the reference regression test.
+RangeBuilder.jl is a high-performance JuliaGeometry implementation of the computational APIs from R `alphahull` and `rangeBuilder`. The geometry kernel is independent of R and does not require `RCall` at runtime.
 
-RangeBuilder.jl includes a runtime compatibility fast path for
-`DelaunayTriangulation.jl 1.6.6`: ghost-vertex presence is checked by an
-O(1) sentinel lookup instead of repeatedly scanning all graph vertices. No
-upstream package modification is required.
+## Install
 
-## Performance
-
-Performance is a primary design goal. RangeBuilder.jl is optimized for the
-two expensive stages of alpha-hull range construction: Delaunay/Voronoi
-construction and repeated candidate evaluation during dynamic alpha search.
-
-- **One triangulation per dynamic search.** `getDynamicAlphaHull` builds the
-  Delaunay/Voronoi structure once, then evaluates every candidate alpha against
-  that cached structure. A search over *k* alpha values therefore performs one
-  triangulation, rather than *k* triangulations.
-- **A protected Delaunay fast path.** The `DelaunayTriangulation.jl 1.6.6`
-  compatibility path replaces a repeated whole-graph ghost-vertex scan with an
-  O(1) sentinel lookup. It prevents the severe scaling regression observed in
-  large point sets without patching the upstream package.
-- **Optimized alpha-hull assembly.** Arc-circle prefiltering, cached
-  complement indices, and endpoint-indexed arc ordering remove avoidable work
-  from the alpha-hull construction path. Coverage checks use prepared GEOS
-  geometries; range buffering reuses coordinate transformations.
-- **Sparse arc candidates.** Arc intersection candidates are generated with a
-  bounding-box sweep and stored as a sparse adjacency list instead of a dense
-  `a × a` Boolean matrix. The original arc-cutting state machine and candidate
-  order are unchanged.
-- **Exact grid post-processing shortcuts.** Wide hulls use a prepared GEOS
-  `covers` check for cells fully contained by the hull; boundary cells retain
-  the original GEOS `intersects` predicate, so grid membership is unchanged.
-
-On the development machine, a warmed dynamic search over 10,000 points and
-four candidate alphas completed in approximately **1.5–1.6 seconds** after
-these changes, versus about **46.7 seconds** for the earlier implementation.
-Timing is data- and hardware-dependent, but the structural improvement is
-intentional: costly triangulation is no longer repeated for every alpha.
-
-### Comparison with the original R packages
-
-The following warmed median timings were measured on the same development
-machine using deterministic inputs. They compare this package directly with
-the installed original R `alphahull` and `rangeBuilder` packages—not with a
-reimplementation. They are deliberately small enough to be rerun locally.
-
-| Workload | Julia RangeBuilder.jl | Original R package | Relative result |
-| --- | ---: | ---: | ---: |
-| `ahull` + `areaahull`, 500 points | 0.0071 s | `alphahull`: 0.0600 s | 8.5× faster |
-| `ahull` + `areaahull`, 2,000 points | 0.0318 s | `alphahull`: 0.2200 s | 6.9× faster |
-| `ahull` + `areaahull`, 10,000 points | 0.2225 s | `alphahull`: 1.1300 s | 5.1× faster |
-| `ahull` + `areaahull`, 100,000 points | 4.9479 s | `alphahull`: 39.0300 s | 7.9× faster |
-| Dynamic search, 500 points, four alpha candidates | 0.0453 s | `rangeBuilder`: 4.17 s | 92× faster |
-| Dynamic search, 1,000 points, ten alpha candidates | 0.4474 s | `rangeBuilder`: 30.75 s | 68.7× faster |
-| Dynamic search, 10,000 points, ten available alpha candidates | 1.5555 s | `rangeBuilder`: 1102.1 s | 708× faster* |
-
-The dynamic benchmarks use `fraction=0.95`, `partCount=3`, `buff=0`, and
-disabled coast clipping so they isolate range construction. The 500-point row
-searches `0.005:0.005:0.020`; the 1,000-point row searches
-`0.005:0.005:0.050`. Both implementations chose the same fallback label,
-`alphaMCH`, for each fixed point set. The large dynamic-search gap is
-expected: the original R workflow repeatedly invokes `alphahull::ahull()` as
-alpha changes, whereas RangeBuilder.jl reuses its single Delaunay/Voronoi
-construction.
-
-At the larger dynamic-search target (10,000 points and ten available alpha
-candidates), RangeBuilder.jl selected `alpha0.02` and had a warmed median of
-**1.5555 s**. A single original R `rangeBuilder` run took **1102.1 s**
-(about 18.4 minutes) and selected the same `alpha0.02`. The 708× figure is
-therefore an indicative single-run comparison (*), not an R median; a full
-seven-repeat R median is intentionally omitted because it is prohibitively
-long. This target is intentionally opt-in in the benchmark script.
-
-The benchmark scripts under `benchmark/` measure both cached alpha-hull components
-and end-to-end construction at fixed random seeds. They are designed for
-revision-to-revision comparisons on the same machine.
-
-### Full Rosales workflow
-
-The Julia GBIF workflow was run with eight Julia threads on 1,063,070 cleaned
-records and 9,263 species. It produced 9,263 successful species ranges (7,519
-alpha-hull tasks and 1,744 direct sparse-species tasks) and 763,715 species-grid
-rows. End-to-end time was **211.46 s**, including **191.54 s** for range
-construction. This is a Julia workflow measurement, not an R comparison.
-
-The interactive workflow script is intentionally ignored by Git in this
-repository. With the local data paths adjusted as needed, the run is:
-
-```powershell
-@'
-include(raw"C:\path\to\alphahull\R\build_species_alpha_hull_1deg_ranges_gbif.jl")
-using .RangeBuilderWorkflow
-run_family_ranges(
-    grid_path=raw"C:\path\to\alphahull\R\1d\1.shp",
-    occurrence_file=raw"E:\Rosales\native_records.csv.gz",
-    output_directory=raw"C:\path\to\alphahull\R\output\1deg_ranges",
-    family="Rosales", workers=8, overwrite=true,
-    buffer_m=10_000, fraction=0.95, part_count=3,
-    initial_alpha=2, alpha_increment=1, alpha_cap=400,
-    clip_to_coast=:terrestrial,
-)
-'@ | julia -t 8 --project=R/julia -
+```julia
+using Pkg
+Pkg.add(url="https://github.com/wyx619/RangeBuilder.jl")
 ```
 
-The run writes `all_species_range_summary.csv`, the species-grid distribution,
-and `workflow_timings.csv` to the selected output directory.
+For local development:
 
-### S2-compatible coast clipping
+```julia
+using Pkg
+Pkg.develop(path="C:/path/to/RangeBuilder.jl")
+```
 
-Julia buffers each accepted range in Equal Earth, inverse-projects it to WGS84,
-and then performs terrestrial or aquatic clipping with `S2Geography.jl`. This
-package binds Google's S2 geometry engine, the same spherical backend used by
-the original R `sf` workflow when `sf_use_s2(TRUE)` is active. Great-circle
-coast boundaries, antimeridian crossings, and multi-feature output are therefore
-handled without R or `RCall` at runtime.
-
-The alpha-hull and Delaunay stages remain unchanged. `S2Geography` is used only
-for the final geographic coast overlay; the resulting WKB is fed back into the
-existing Julia/GeoInterface grid locator. The bundled Natural Earth 50m land
-geometry is used offline.
-
-## Use
+## Quick start
 
 ```julia
 using RangeBuilder
-points = [0.0 0.0; 2.0 0.0; 2.0 1.0; 0.0 2.0; 0.6 0.7]
+
+points = [
+    116.0 39.0
+    116.5 39.0
+    116.4 39.4
+    116.1 39.3
+]
+
 hull = ahull(points; alpha=0.7)
-inside = inahull(hull, [0.5 0.5; 3.0 3.0])
+polygon = ah2polygon(hull)
+inside = inahull(hull, [116.2 39.2; 118.0 40.0])
 
-range = getDynamicAlphaHull(points; fraction=0.95, clipToCoast=:no)
-filtered = filterByProximity(points, 20.0)
+range = getDynamicAlphaHull(
+    points;
+    fraction=0.95,
+    partCount=3,
+    buff=1_000,
+    clipToCoast=:terrestrial,
+)
 
-ranges = (species_a=ah2polygon(ahull(points; alpha=0.7)),
-          species_b=ah2polygon(ahull(points .+ 0.5; alpha=0.7)))
-range_stack = rasterStackFromPolyList(ranges; resolution=0.2)
-richness = speciesRichness(range_stack)
-
-batch = buildRanges(Dict("species_a" => points, "species_b" => points[1:2, :]);
-                    clipToCoast=:no)
+range.alpha
+range.hull
 ```
+
+Coordinates are supplied as an `n x 2` matrix in `(longitude, latitude)` order. `buff` is measured in metres. The result contains a GeoInterface-compatible polygon or multipolygon and the selected alpha label.
+
+## Performance
+
+The main performance work is concentrated in Delaunay/Voronoi construction and dynamic alpha evaluation:
+
+- one Delaunay structure is reused across candidate alphas in the cached backend;
+- the `DelaunayTriangulation.jl 1.6.6` compatibility path uses an O(1) ghost-vertex sentinel lookup;
+- alpha-hull assembly uses arc prefilters, cached complement indices and endpoint-indexed ordering;
+- arc intersection candidates use sparse bounding-box adjacency rather than a dense `a x a` matrix;
+- prepared GEOS predicates accelerate repeated coverage and grid-boundary checks without changing the boundary predicate.
+
+The `:shull` backend rebuilds each candidate when exact R `rangeBuilder` call order is required. It is slower than the cached backend but preserves candidate-level retry and RNG semantics.
+
+The development benchmark on 10,000 points and four candidate alphas is approximately 1.5-1.6 seconds after warm-up, compared with approximately 46.7 seconds for the earlier implementation. Timings depend on hardware and input geometry.
+
+## Dynamic range API
+
+```julia
+range = getDynamicAlphaHull(
+    points;
+    fraction=0.95,
+    partCount=3,
+    initialAlpha=2,
+    alphaIncrement=1,
+    alphaCap=400,
+    buff=10_000,
+    clipToCoast=:terrestrial,
+    backend=:shull,
+)
+```
+
+`clipToCoast` accepts `:no`, `:terrestrial`, or `:aquatic`. The dynamic search itself remains ordered within one species; independent species can be scheduled by an application with Julia threads. For strict R-compatible retries, pass a matching `RSeed` RNG.
+
+## S2 coast semantics
+
+Accepted ranges are buffered in Equal Earth and then converted to WGS84 for the final geographic coast overlay. `S2Geography.jl` performs the terrestrial or aquatic intersection using Google S2 semantics. This handles great-circle boundaries, antimeridian crossings and multi-component output without R or `RCall`.
+
+The S2 overlay is deliberately limited to final coast clipping. The high-frequency alpha validity and occurrence-coverage checks use the lighter GeometryOps spherical predicates, while the dedicated spherical convex-hull implementation is used for the MCH fallback.
+
+## Bundled spatial data
+
+The package bundles Natural Earth 1:50m land data for offline coast clipping and land filtering. The one-degree grid used by the optional range-building workflow is also bundled as an internal JLD2 resource. Its path is resolved by the package; callers do not need to locate or pass the file.
+
+## Multiple species and richness
+
+```julia
+ranges = (
+    species_a=ah2polygon(ahull(points; alpha=0.7)),
+    species_b=ah2polygon(ahull(points .+ [0.5 0.5]; alpha=0.7)),
+)
+
+stack = rasterStackFromPolyList(ranges; resolution=0.2)
+richness = speciesRichness(stack)
+```
+
+`rasterStackFromPolyList` returns a `Rasters.RasterStack`; `speciesRichness` reduces it to per-cell species counts. The package does not include a plotting backend.
 
 ## External plotting
 
-RangeBuilder.jl intentionally has no plotting dependency and exports no
-plotting API. This keeps the computational environment small and avoids
-forcing a graphics backend on batch or server workflows. Its polygon outputs
-implement the GeoInterface geometry protocol, and its richness output is a
-`Rasters.Raster`; both can be plotted by packages installed in the calling
-project.
-
-For example, install a Makie backend and GeoMakie in an application that
-needs maps:
-
-```julia
-import Pkg
-Pkg.add(["CairoMakie", "GeoMakie"])
-```
-
-Then draw a computed range and its source occurrences without adding either
-package to RangeBuilder.jl itself:
-
-```julia
-using CairoMakie, GeoMakie
-
-range = getDynamicAlphaHull(points; buff=1_000, clipToCoast=:terrestrial)
-fig = Figure()
-ax = GeoAxis(fig[1, 1]; dest="+proj=eqearth")
-poly!(ax, range.hull; color=(:steelblue, 0.35), strokecolor=:steelblue)
-scatter!(ax, points[:, 1], points[:, 2]; color=:black, markersize=7)
-fig
-```
-
-Use a different Makie backend (for example `GLMakie` or `WGLMakie`) when an
-interactive desktop or browser display is needed. For a simple non-geographic
-view of a richness raster, its values can be materialized for any plotting
-library, for example `heatmap(Array(richness))` with Makie.
-
-`getDynamicAlphaHull` returns `(hull, alpha)`, where `hull` is a
-GeoInterface polygon/multipolygon and `alpha` records the selected alpha (or
-`"alphaMCH"` for the convex-hull fallback). `buff` is measured in metres;
-coast clipping uses the bundled Natural Earth 50m coastline data and works
-offline.
-
-`rasterStackFromPolyList` accepts a named tuple or dictionary of GeoInterface
-polygons and returns a `Rasters.RasterStack`. Each layer contains `1` where a
-cell center is inside the polygon and `missing` elsewhere. Use
-`retainSmallRanges=false` to drop polygons with no covered cell centers, or
-provide `extent=[xmin, xmax, ymin, ymax]` to override the automatic extent.
-`speciesRichness` reduces that stack to one raster of per-cell species counts;
-with its default `zeroToMissing=true`, cells with no species are `missing` as
-in the R example workflow.
-
-`filterByLand` returns `true` for occurrence coordinates on a Natural Earth
-land polygon buffered by 2 km, `false` for ocean, and `missing` for missing
-coordinates. The repository bundles Natural Earth v5.1.2's 50m land dataset,
-so coastline clipping and land filtering work fully offline.
-
-`buildRanges` is the conservative multi-species entry point. It returns
-successfully modelled polygons in `ranges` and records species with fewer than
-three unique points or degenerate geometry in `excluded`; these species are
-not converted to inferred buffer ranges.
+Polygon outputs implement GeoInterface and can be plotted by the application that owns the display stack. For example, an application may install `CairoMakie` and `GeoMakie` and pass `range.hull` to `poly!`. Keeping plotting external avoids forcing a graphics backend on batch and server environments.
 
 ## Compatibility
 
-The following computational functions preserve R's matrix schemas and
-one-based point indices: `delvor`, `ashape`, `complement`, `ahull`, `dw`,
-`inter`, `lengthahull`, `areaahulleval`, `areaahull`, `inahull`, `rotation`,
-`anglesArc`, `koch`, and `rkoch`.
+The computational functions preserve R-style matrix schemas and one-based point indices for `delvor`, `ashape`, `complement`, `ahull`, `dw`, `inter`, `lengthahull`, `areaahulleval`, `areaahull`, `inahull`, `rotation`, `anglesArc`, `koch` and `rkoch`.
 
-`arc` returns its sampled coordinates rather than drawing to a graphics
-device. Similarly, `dw_track` and `ahull_track` return a vector of sampled
-arc-coordinate matrices instead of R `ggplot2` layers. They accept an `rng`
-keyword for reproducible sampling.
+For ordinary inputs, R and Julia produce equivalent geometry. Cocircular or near-degenerate point sets can have multiple valid Delaunay triangulations, so internal triangle, arc and row order is not part of the compatibility contract. The accepted geometry and range semantics remain the target.
 
-For ordinary inputs the R and Julia triangulations yield equivalent geometry.
-For cocircular or near-degenerate inputs, Delaunay triangulations are not
-unique: R and Julia may select different valid diagonals, so internal mesh and
-arc row order are not part of the compatibility contract.
+## Development checks
 
-## Verification
-
-```powershell
-julia --project=. -e "using Pkg; Pkg.test()"
-julia --project=test test/reference_r.jl
-julia --project=. benchmark/core.jl
-julia --project=. benchmark/end_to_end.jl
-Rscript benchmark/end_to_end.R
-julia --project=test benchmark/dynamic_reference.jl 500 1000
+```julia
+using Pkg
+Pkg.test()
 ```
 
-`test/runtests.jl` only runs pure Julia unit, workflow, and regression tests.
-`test/reference_r.jl` is an optional development-only semantic comparison
-against the locally installed original `alphahull` and `rangeBuilder` R
-packages. It canonicalizes ordinary mesh and arc geometry; it intentionally
-does not require matching row order for cocircular or near-degenerate inputs.
-RCall is isolated in `test/Project.toml`, so it is not a runtime dependency of
-RangeBuilder.jl.
-
-`benchmark/core.jl` warms up Julia and reports median time and allocation for
-`delvor`, `ashape`, `complement`, `ahull`, and `dw` at fixed random seeds.
-The benchmark is intended for comparing revisions on the same machine, not
-for cross-machine timing claims.
-
-`benchmark/end_to_end.jl` and `benchmark/end_to_end.R` use the same
-deterministic point sets for a warm end-to-end comparison of `ahull` plus
-area evaluation.
-
-`benchmark/dynamic_reference.jl` compares `getDynamicAlphaHull` with the
-installed original R `rangeBuilder` package through RCall. RCall is confined
-to the test environment and remains outside the package's runtime
-dependencies. With no arguments it runs the 500- and 1,000-point reference
-cases.
+R reference comparisons are development-only and isolated from the package runtime. They require the original R packages to be installed locally.
