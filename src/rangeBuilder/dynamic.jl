@@ -1,6 +1,25 @@
 const _range_world_cache = Dict{Int,Any}()
 const _range_land_path = normpath(joinpath(@__DIR__, "..", "tools", "ne_50m_land.jld2"))
 const _one_degree_map_path = normpath(joinpath(@__DIR__, "..", "tools", "OneDegreeMap.jld2"))
+
+"""Load the bundled one-degree grid payload used by the range workflow.
+
+The payload remains serialized as IDs and WKB.  The workflow constructs its
+own GEOS contexts and spatial indexes after loading, so the immutable resource
+is safe to reuse from independent workers.
+"""
+function _read_one_degree_map_resource()
+    isfile(_one_degree_map_path) ||
+        throw(ArgumentError("bundled one-degree map is missing: $_one_degree_map_path"))
+    payload = JLD2.load(_one_degree_map_path)
+    haskey(payload, "ids") && haskey(payload, "wkb") && haskey(payload, "crs") ||
+        throw(ArgumentError("bundled one-degree map has an invalid payload"))
+    ids = Int.(payload["ids"])
+    wkb = [Vector{UInt8}(bytes) for bytes in payload["wkb"]]
+    length(ids) == length(wkb) ||
+        throw(ArgumentError("bundled one-degree map has mismatched IDs and WKB"))
+    return Dict{String,Any}("ids" => ids, "wkb" => wkb, "crs" => String(payload["crs"]))
+end
 # Match the R reference buffer default: 30 segments per quadrant.
 # `getDynamicAlphaHull` calls its buffer operation without overriding
 # nQuadSegs, so 30 segments per quadrant is the faithful equivalent.
@@ -499,13 +518,61 @@ function _s2_clip_components(poly, world, mode::Symbol; native=nothing)
     components = _polygon_components(poly)
     isempty(components) && return poly
     world_s2 = S2Geography.Geography(world)
-    clipped = map(components) do component
-        component_s2 = S2Geography.Geography(component)
-        result = mode === :terrestrial ?
-                 S2Geography.intersection(component_s2, world_s2) :
-                 S2Geography.difference(component_s2, world_s2)
+    decode(result) = begin
         wkb = copy(S2Geography.towkb(result))
         isnothing(native) ? LibGEOS.readgeom(wkb) : LibGEOS.readgeom(wkb, native.geos)
+    end
+    clipped = try
+        map(components) do component
+            component_s2 = S2Geography.Geography(component)
+            result = mode === :terrestrial ?
+                     S2Geography.intersection(component_s2, world_s2) :
+                     S2Geography.difference(component_s2, world_s2)
+            decode(result)
+        end
+    catch error
+        error isa S2Geography.S2GeographyError || rethrow()
+        # Natural Earth contains a small number of rings that S2 rejects when
+        # they are combined into the global multi-polygon.  Process land
+        # components independently so one malformed/degenerate component does
+        # not discard an otherwise valid range.  The normal full-overlay path
+        # above remains unchanged for valid global inputs.
+        world_components = _polygon_components(world)
+        if mode === :terrestrial
+            pieces = Any[]
+            for component in components
+                component_s2 = S2Geography.Geography(component)
+                for land_component in world_components
+                    result = try
+                        S2Geography.intersection(
+                            component_s2,
+                            S2Geography.Geography(land_component),
+                        )
+                    catch inner
+                        inner isa S2Geography.S2GeographyError || rethrow()
+                        nothing
+                    end
+                    isnothing(result) || push!(pieces, decode(result))
+                end
+            end
+            pieces
+        else
+            map(components) do component
+                result = S2Geography.Geography(component)
+                for land_component in world_components
+                    result = try
+                        S2Geography.difference(
+                            result,
+                            S2Geography.Geography(land_component),
+                        )
+                    catch inner
+                        inner isa S2Geography.S2GeographyError || rethrow()
+                        result
+                    end
+                end
+                decode(result)
+            end
+        end
     end
     return length(clipped) == 1 ? only(clipped) :
            GeoInterface.Wrappers.GeometryCollection(clipped; crs=4326)

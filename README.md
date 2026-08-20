@@ -119,4 +119,4 @@ using Pkg
 Pkg.test()
 ```
 
-R reference comparisons are development-only and isolated from the package runtime. They require the original R packages to be installed locally.
+

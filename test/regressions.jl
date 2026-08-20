@@ -188,3 +188,22 @@ end
     @test length(ring) == 4
     @test ring[1] == ring[end]
 end
+
+@testset "Bundled one-degree map resource" begin
+    payload = RangeBuilder._read_one_degree_map_resource()
+    @test isfile(RangeBuilder._one_degree_map_path)
+    @test startswith(payload["crs"], "+proj=cea")
+    @test length(payload["ids"]) == length(payload["wkb"])
+    @test length(payload["ids"]) > 10_000
+    @test all(id -> id >= 0, payload["ids"])
+    @test length(unique(payload["ids"])) == length(payload["ids"])
+    @test all(bytes -> !isempty(bytes), payload["wkb"])
+    first_geometry = RangeBuilder.LibGEOS.readgeom(
+        Vector{Cuchar}(payload["wkb"][1]),
+    )
+    last_geometry = RangeBuilder.LibGEOS.readgeom(
+        Vector{Cuchar}(payload["wkb"][end]),
+    )
+    @test first_geometry !== nothing
+    @test last_geometry !== nothing
+end
