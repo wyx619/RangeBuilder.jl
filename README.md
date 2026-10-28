@@ -1,19 +1,12 @@
 # RangeBuilder.jl
 
-RangeBuilder.jl is a high-performance, R-compatible Julia implementation of the computational APIs from R `alphahull` and `rangeBuilder`. Its alpha-hull kernel is a pure-Julia port of R `interp::tri.mesh()` SHull; it does not require R or `RCall` at runtime.
+RangeBuilder.jl is a high-performance Julia package for alpha-hull geometry, species range construction, and spatial richness analysis. Its alpha-hull kernel uses a pure-Julia SHull triangulation.
 
 ## Install
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/wyx619/RangeBuilder.jl")
-```
-
-For local development:
-
-```julia
-using Pkg
-Pkg.develop(path="C:/path/to/RangeBuilder.jl")
 ```
 
 ## Quick start
@@ -48,11 +41,9 @@ Coordinates are supplied as an `n x 2` matrix in `(longitude, latitude)` order. 
 
 ## Performance
 
-RangeBuilder uses one deterministic SHull path for all alpha-hull calls. Dynamic
-alpha search reuses a first successful non-jittered SHull triangulation within
-one search; duplicate-point recovery, jitter retries, topology failures, and
-MCH fallback retain the original candidate-by-candidate path so R
-`rangeBuilder` semantics and RNG consumption remain compatible.
+RangeBuilder uses SHull triangulation for alpha-hull construction. Dynamic
+alpha search reuses a successful non-jittered triangulation across candidates,
+with recovery paths for duplicate points and degenerate geometry.
 
 The range workflow is optimized around the remaining spatial hotspots:
 
@@ -63,8 +54,7 @@ The range workflow is optimized around the remaining spatial hotspots:
 
 On the Rosales reference input (1,063,070 records; 9,263 species), the bundled
 Tables.jl workflow completed **9,263/9,263** species successfully with 8 Julia
-workers: `build_ranges=101.818 s`, total elapsed time `124.404 s`. Timings
-depend on hardware, input geometry, coast proximity, and worker count.
+workers: `build_ranges=101.818 s`, total elapsed time `124.404 s`.
 
 ## Dynamic range API
 
@@ -81,11 +71,11 @@ range = getDynamicAlphaHull(
 )
 ```
 
-`clipToCoast` accepts `:no`, `:terrestrial`, or `:aquatic`. The dynamic search itself remains ordered within one species; independent species can be scheduled by an application with Julia threads. For strict R-compatible retries, pass a matching `RSeed` RNG.
+`clipToCoast` accepts `:no`, `:terrestrial`, or `:aquatic`. The dynamic search proceeds within each species; independent species can be scheduled with Julia threads.
 
 ## S2 coast semantics
 
-Accepted ranges are buffered in Equal Earth and then converted to WGS84 for the final geographic coast overlay. `S2Geography.jl` performs the terrestrial or aquatic intersection using Google S2 semantics. This handles great-circle boundaries, antimeridian crossings and multi-component output without R or `RCall`.
+Accepted ranges are buffered in Equal Earth and then converted to WGS84 for the final geographic coast overlay. `S2Geography.jl` performs the terrestrial or aquatic intersection using Google S2 semantics, handling great-circle boundaries, antimeridian crossings and multi-component output.
 
 The S2 overlay is deliberately limited to final coast clipping. The high-frequency alpha validity and occurrence-coverage checks use the lighter GeometryOps spherical predicates, while the dedicated spherical convex-hull implementation is used for the MCH fallback.
 
@@ -140,16 +130,3 @@ richness = speciesRichness(stack)
 ## External plotting
 
 Polygon outputs implement GeoInterface and can be plotted by the application that owns the display stack. For example, an application may install `CairoMakie` and `GeoMakie` and pass `range.hull` to `poly!`. Keeping plotting external avoids forcing a graphics backend on batch and server environments.
-
-## Compatibility
-
-The computational functions preserve R-style matrix schemas and one-based point indices for `delvor`, `ashape`, `complement`, `ahull`, `dw`, `inter`, `lengthahull`, `areaahulleval`, `areaahull`, `inahull`, `rotation`, `anglesArc`, `koch` and `rkoch`.
-
-The package uses the R-compatible SHull triangulation path. For ordinary inputs, R and Julia produce equivalent geometry; duplicate or near-degenerate inputs follow R-style point recovery and jitter handling. The accepted geometry and range semantics remain the compatibility target.
-
-## Development checks
-
-```julia
-using Pkg
-Pkg.test()
-```

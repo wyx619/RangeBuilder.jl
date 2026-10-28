@@ -1,19 +1,12 @@
 # RangeBuilder.jl
 
-RangeBuilder.jl 是高性能、与 R 兼容的 `alphahull` 与 `rangeBuilder` Julia 实现。alpha-hull 核心是对 R `interp::tri.mesh()` SHull 的纯 Julia 移植，运行时不需要 R 或 `RCall`。
+RangeBuilder.jl 是用于 alpha-hull 几何计算、物种分布范围构建和空间丰富度分析的高性能 Julia 包。其 alpha-hull 核心使用纯 Julia 实现的 SHull 三角剖分。
 
 ## 安装
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/wyx619/RangeBuilder.jl")
-```
-
-本地开发：
-
-```julia
-using Pkg
-Pkg.develop(path="C:/path/to/RangeBuilder.jl")
 ```
 
 ## 快速开始
@@ -48,9 +41,8 @@ range.hull
 
 ## 性能优化
 
-所有 alpha-hull 调用都使用唯一、确定性的 SHull 路径。动态 alpha 搜索会在同一次
-搜索内复用首次成功且未 jitter 的 SHull 三角剖分；重复点恢复、jitter 重试、拓扑失败和
-MCH 回退仍保持逐候选路径，从而兼容 R `rangeBuilder` 的语义和 RNG 消耗。
+alpha-hull 构建使用 SHull 三角剖分。动态 alpha 搜索会在同一次搜索内复用成功且
+未扰动的三角剖分，并提供重复点和退化几何的恢复路径。
 
 范围工作流则针对其余空间热点优化：
 
@@ -61,8 +53,7 @@ MCH 回退仍保持逐候选路径，从而兼容 R `rangeBuilder` 的语义和 
 
 在 Rosales 基准输入（1,063,070 条记录、9,263 个物种）上，内置的
 Tables.jl 工作流使用 8 个 Julia worker 成功完成 **9,263/9,263** 个物种：
-`build_ranges=101.818 秒`，总耗时 `124.404 秒`。实际速度取决于硬件、输入
-几何、海岸邻近程度和 worker 数。
+`build_ranges=101.818 秒`，总耗时 `124.404 秒`。
 
 ## 动态范围 API
 
@@ -79,11 +70,11 @@ range = getDynamicAlphaHull(
 )
 ```
 
-`clipToCoast` 可取 `:no`、`:terrestrial` 或 `:aquatic`。单个物种内部的动态搜索保持有序；应用程序可以使用 Julia 线程调度相互独立的物种。要严格复刻 R 的重试过程，请传入匹配的 `RSeed` RNG。
+`clipToCoast` 可取 `:no`、`:terrestrial` 或 `:aquatic`。每个物种内部依次进行动态搜索；应用程序可以使用 Julia 线程调度相互独立的物种。
 
 ## S2 海岸语义
 
-接受的范围先在 Equal Earth 中缓冲，再转换到 WGS84 执行最终地理海岸 overlay。`S2Geography.jl` 使用 Google S2 语义执行陆地或海洋裁剪，可处理大圆弧边界、反经线和多组件结果，运行时不需要 R 或 `RCall`。
+接受的范围先在 Equal Earth 中缓冲，再转换到 WGS84 执行最终地理海岸 overlay。`S2Geography.jl` 使用 Google S2 球面几何执行陆地或海洋裁剪，可处理大圆弧边界、反经线和多组件结果。
 
 S2 只用于最终海岸裁剪。高频的 alpha 有效性与出现点覆盖率检查使用更轻量的 GeometryOps 球面谓词；MCH 回退使用专用的球面凸包实现。
 
@@ -136,16 +127,3 @@ richness = speciesRichness(stack)
 ## 外部绘图
 
 多边形输出实现 GeoInterface，可以交给应用程序自己的绘图栈。例如，应用程序可以额外安装 `CairoMakie` 和 `GeoMakie`，再将 `range.hull` 传给 `poly!`。绘图保持在包外，避免批处理和服务器环境被迫安装图形后端。
-
-## 兼容性
-
-`delvor`、`ashape`、`complement`、`ahull`、`dw`、`inter`、`lengthahull`、`areaahulleval`、`areaahull`、`inahull`、`rotation`、`anglesArc`、`koch` 和 `rkoch` 保持 R 风格的矩阵结构与从 1 开始的点编号。
-
-包使用与 R 兼容的 SHull 三角剖分路径。对普通输入，R 与 Julia 会产生等价几何；重复或近退化输入则遵循 R 风格的点恢复与 jitter 处理。兼容目标是最终接受的几何和范围语义。
-
-## 开发检查
-
-```julia
-using Pkg
-Pkg.test()
-```
